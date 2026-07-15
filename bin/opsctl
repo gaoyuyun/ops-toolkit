@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC1091
+set -Eeuo pipefail
+
+OPS_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+export OPS_ROOT
+
+# shellcheck source=../lib/common.sh
+source "$OPS_ROOT/lib/common.sh"
+# shellcheck source=../lib/platform.sh
+source "$OPS_ROOT/lib/platform.sh"
+# shellcheck source=../lib/download.sh
+source "$OPS_ROOT/lib/download.sh"
+# shellcheck source=../modules/user.sh
+source "$OPS_ROOT/modules/user.sh"
+# shellcheck source=../modules/ssh.sh
+source "$OPS_ROOT/modules/ssh.sh"
+# shellcheck source=../modules/firewall.sh
+source "$OPS_ROOT/modules/firewall.sh"
+# shellcheck source=../modules/fail2ban.sh
+source "$OPS_ROOT/modules/fail2ban.sh"
+# shellcheck source=../modules/docker.sh
+source "$OPS_ROOT/modules/docker.sh"
+# shellcheck source=../modules/logrotate.sh
+source "$OPS_ROOT/modules/logrotate.sh"
+# shellcheck source=../modules/maintenance.sh
+source "$OPS_ROOT/modules/maintenance.sh"
+# shellcheck source=../modules/wsl.sh
+source "$OPS_ROOT/modules/wsl.sh"
+# shellcheck source=../modules/system.sh
+source "$OPS_ROOT/modules/system.sh"
+# shellcheck source=../modules/tools.sh
+source "$OPS_ROOT/modules/tools.sh"
+# shellcheck source=../modules/alpine.sh
+source "$OPS_ROOT/modules/alpine.sh"
+# shellcheck source=../modules/xray.sh
+source "$OPS_ROOT/modules/xray.sh"
+
+ops_detect_platform
+ops_load_config
+
+case ${1:-help} in
+  -h | --help | help | -V | --version) ;;
+  *) ops_log "version $OPS_VERSION — $(ops_platform_label)" ;;
+esac
+
+ops_help() {
+  cat <<EOF
+ops-toolkit $OPS_VERSION — $(ops_platform_label)
+
+Usage: opsctl COMMAND [ARGS]
+
+Commands:
+  platform                 Show detected platform details
+  user                     Login, backup, certificate, SSH-key and Zsh users
+  system                   Hostname, Swap and BBR configuration
+  ssh harden               Install a validated OpenSSH hardening drop-in
+  firewall                 Install, inspect, add and delete UFW rules
+  fail2ban install         Install packaged Fail2ban resources
+  logrotate install        Install packaged Logrotate policy
+  docker                   Install Docker and manage groups, data and Compose
+  maintenance analyze|cleanup
+                           Analyze and clean packages, journals, logs, Docker and /tmp
+  wsl                     WSL initialization, SSH sync, Mihomo and dev environment
+  xray                     Install, configure, scan and manage Xray/sing-box
+  tools download-dd        Download the reviewed reinstall/DD helper source
+  alpine                   Alpine-specific compatibility commands
+  menu                     Open a compatibility menu
+
+Global options:
+  -h, --help               Show this help
+  -V, --version            Show version and platform
+
+Configuration:
+  /etc/ops-toolkit/config.env
+  ~/.config/ops-toolkit/config.env
+
+Run 'opsctl COMMAND --help' for command-specific help.
+EOF
+}
+
+ops_platform_main() {
+  printf 'version=%s\n' "$OPS_VERSION"
+  printf 'os=%s\n' "$OPS_OS_ID"
+  printf 'os_version=%s\n' "$OPS_OS_VERSION"
+  printf 'family=%s\n' "$OPS_OS_FAMILY"
+  printf 'arch=%s\n' "$OPS_ARCH"
+  printf 'wsl=%s\n' "$OPS_IS_WSL"
+}
+
+ops_security_menu() {
+  local choice port
+  while true; do
+    printf '\nSecurity settings\n1) SSH hardening  2) UFW management  3) Install Fail2ban  4) Fail2ban status  0) Back\n'
+    read -r -p 'Select: ' choice
+    case $choice in
+      1)
+        read -r -p "SSH port ($OPS_DEFAULT_SSH_PORT): " port
+        ops_ssh_harden --port "${port:-$OPS_DEFAULT_SSH_PORT}"
+        ;;
+      2) ops_firewall_menu ;;
+      3) ops_fail2ban_menu ;;
+      4) ops_fail2ban_status ;;
+      0) return ;;
+      *) ops_warn 'Invalid selection.' ;;
+    esac
+  done
+}
+
+ops_menu() {
+  [[ -t 0 ]] || ops_die 'The menu requires an interactive terminal.'
+  ops_require_root
+  local choice
+  if [[ $OPS_OS_ID == alpine ]]; then
+    ops_alpine_menu
+    return
+  fi
+  while true; do
+    cat <<'EOF'
+
+1) User management        5) Other tools
+2) System configuration   6) System maintenance
+3) Security settings      7) WSL management
+4) Docker management      8) Xray management
+9) Platform details       0) Exit
+EOF
+    read -r -p 'Select: ' choice
+    case $choice in
+      1) ops_user_menu ;;
+      2) ops_system_menu ;;
+      3) ops_security_menu ;;
+      4) ops_docker_menu ;;
+      5) ops_tools_menu ;;
+      6) ops_maintenance_menu ;;
+      7) if ((OPS_IS_WSL)); then ops_wsl_menu; else ops_warn 'WSL is not detected.'; fi ;;
+      8) ops_xray_menu ;;
+      9) ops_platform_main ;;
+      0) return 0 ;;
+      *) ops_warn 'Invalid selection.' ;;
+    esac
+  done
+}
+
+case ${1:-} in
+  '')
+    if [[ -t 0 ]]; then
+      ops_menu
+    else
+      ops_help
+    fi
+    ;;
+  -h | --help | help) ops_help ;;
+  -V | --version) printf 'opsctl %s — %s\n' "$OPS_VERSION" "$(ops_platform_label)" ;;
+  platform)
+    shift
+    (($# == 0)) || ops_die 'platform takes no arguments'
+    ops_platform_main
+    ;;
+  user)
+    shift
+    ops_user_main "$@"
+    ;;
+  system)
+    shift
+    ops_system_main "$@"
+    ;;
+  ssh)
+    shift
+    ops_ssh_main "$@"
+    ;;
+  firewall)
+    shift
+    ops_firewall_main "$@"
+    ;;
+  fail2ban)
+    shift
+    ops_fail2ban_main "$@"
+    ;;
+  logrotate)
+    shift
+    ops_logrotate_main "$@"
+    ;;
+  docker)
+    shift
+    ops_docker_main "$@"
+    ;;
+  maintenance)
+    shift
+    ops_maintenance_main "$@"
+    ;;
+  wsl)
+    shift
+    ops_wsl_main "$@"
+    ;;
+  xray)
+    shift
+    ops_xray_main "$@"
+    ;;
+  tools)
+    shift
+    ops_tools_main "$@"
+    ;;
+  alpine)
+    shift
+    ops_alpine_main "$@"
+    ;;
+  menu)
+    shift
+    (($# == 0)) || ops_die 'menu takes no arguments'
+    ops_menu
+    ;;
+  *) ops_die "Unknown command: $1 (run 'opsctl --help')" ;;
+esac

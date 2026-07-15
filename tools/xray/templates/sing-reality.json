@@ -1,0 +1,29 @@
+{
+  "log": { "level": "info", "timestamp": true },
+  "dns": {},
+  "ntp": { "enabled": true, "server": "time.apple.com" },
+  "inbounds": [
+    {
+      "tag": "VLESS-REALITY",
+      "type": "vless",
+      "listen": "::",
+      "listen_port": 44301,
+      "proxy_protocol": true,
+      "users": [{ "flow": "xtls-rprx-vision", "uuid": "" }],
+      "tls": {
+        "enabled": true,
+        "server_name": "example.org",
+        "reality": {
+          "enabled": true,
+          "handshake": { "server": "example.org", "server_port": 443 },
+          "private_key": "",
+          "short_id": [""]
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    { "type": "direct" },
+    { "tag": "direct-out", "type": "direct" }
+  ]
+}

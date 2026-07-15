@@ -1,0 +1,27 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "reality-in",
+      "port": 44301,
+      "protocol": "vless",
+      "settings": {
+        "clients": [{ "id": "", "flow": "xtls-rprx-vision" }],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "tcpSettings": { "acceptProxyProtocol": true },
+        "realitySettings": {
+          "show": false,
+          "target": "example.org:443",
+          "serverNames": ["example.org"],
+          "privateKey": "",
+          "shortIds": [""]
+        }
+      }
+    }
+  ],
+  "outbounds": [{ "protocol": "freedom", "tag": "direct-out" }]
+}

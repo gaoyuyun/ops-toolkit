@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly VERSION='@VERSION@'
+readonly RELEASE_BASE_URL='@RELEASE_BASE_URL@'
+readonly ARCHIVE="ops-toolkit-v${VERSION}.tar.gz"
+temp_dir=''
+
+cleanup() {
+  [[ -z $temp_dir ]] || rm -rf -- "$temp_dir"
+}
+trap cleanup EXIT INT TERM
+
+download() {
+  local url=$1 destination=$2
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 3 --connect-timeout 10 --output "$destination" "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --https-only --tries=3 --timeout=10 --output-document="$destination" "$url"
+  else
+    printf 'bootstrap: curl or wget is required.\n' >&2
+    exit 1
+  fi
+}
+
+printf 'ops-toolkit bootstrap %s — %s / %s\n' "$VERSION" "$(uname -s)" "$(uname -m)" >&2
+temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/ops-toolkit.XXXXXXXX")
+download "$RELEASE_BASE_URL/$ARCHIVE" "$temp_dir/$ARCHIVE"
+download "$RELEASE_BASE_URL/$ARCHIVE.sha256" "$temp_dir/$ARCHIVE.sha256"
+
+expected=$(awk 'NR == 1 {print $1}' "$temp_dir/$ARCHIVE.sha256")
+[[ $expected =~ ^[0-9a-fA-F]{64}$ ]] || {
+  printf 'bootstrap: invalid checksum file.\n' >&2
+  exit 1
+}
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$temp_dir/$ARCHIVE" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$temp_dir/$ARCHIVE" | awk '{print $1}')
+else
+  printf 'bootstrap: sha256sum or shasum is required.\n' >&2
+  exit 1
+fi
+[[ $actual == "$expected" ]] || {
+  printf 'bootstrap: archive checksum mismatch.\n' >&2
+  exit 1
+}
+
+tar -xzf "$temp_dir/$ARCHIVE" -C "$temp_dir"
+entry="$temp_dir/ops-toolkit-v$VERSION/bin/opsctl"
+[[ -x $entry ]] || {
+  printf 'bootstrap: release entry point is missing.\n' >&2
+  exit 1
+}
+"$entry" "$@"

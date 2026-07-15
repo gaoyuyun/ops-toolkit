@@ -1,0 +1,14 @@
+@NGINX_LOG_PATH@ {
+    daily
+    maxsize 50M
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 root adm
+    sharedscripts
+    postrotate
+        docker exec @NGINX_CONTAINER@ nginx -s reopen >/dev/null 2>&1 || true
+    endscript
+}
