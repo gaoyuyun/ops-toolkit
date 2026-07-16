@@ -149,9 +149,12 @@ sudo bin/opsctl docker restore /srv/docker_backup.tar.gz --target /srv/docker --
 sudo bin/opsctl docker migrate /old/docker --target /srv/docker --clear
 bin/opsctl maintenance analyze
 sudo bin/opsctl maintenance cleanup --all
+sudo bin/opsctl maintenance cleanup --vscode
 ```
 
 Docker 迁移会识别目录顶层多个 `.yml`/`.yaml` 文件，停止源 Compose、迁移数据、修正权限并启动目标 Compose。使用 `--no-start` 可跳过启动；清理 Docker 卷必须显式使用 `--volumes`。
+
+维护分析会统计历史 VS Code Server 版本。`cleanup --vscode` 会扫描本机登录用户的 `.vscode-server`、`.vscode-server-insiders` 和旧版 `.vscode-remote` 目录，每种 Server 安装保留最新版本以及所有正在运行的版本；使用 `--vscode-user USER` 可只清理指定用户。该类别也包含在默认清理和 `--all` 中。
 
 ## 独立工具
 

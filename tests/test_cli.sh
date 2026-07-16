@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 temp=$(mktemp -d)
-trap 'rm -rf -- "$temp"' EXIT INT TERM
+vscode_test_pid=''
+trap '[[ -z ${vscode_test_pid:-} ]] || kill "$vscode_test_pid" 2>/dev/null || true; rm -rf -- "$temp"' EXIT INT TERM
 wsl_test_user=$(id -un)
 
 "$root/bin/opsctl" --version | grep '^opsctl 0\.1\.0' >/dev/null
@@ -238,7 +239,35 @@ firewall_output=$("$root/bin/opsctl" firewall install --dry-run --yes 2>&1)
 "$root/bin/opsctl" docker restore "$temp/docker-backup.tar.gz" --target "$temp/docker-target" --clear --dry-run --yes >/dev/null
 "$root/bin/opsctl" docker migrate "$temp/docker-source" --target "$temp/docker-target" --clear --delete-source --dry-run --yes >/dev/null
 "$root/bin/opsctl" maintenance cleanup --all --volumes --dry-run --yes >/dev/null
+"$root/bin/opsctl" maintenance cleanup --vscode-user "$wsl_test_user" --dry-run --yes >/dev/null
 "$root/bin/opsctl" maintenance analyze >/dev/null
+vscode_root="$temp/vscode-server/bin"
+mkdir -p \
+  "$vscode_root/1111111111111111111111111111111111111111" \
+  "$vscode_root/2222222222222222222222222222222222222222" \
+  "$vscode_root/3333333333333333333333333333333333333333" \
+  "$vscode_root/4444444444444444444444444444444444444444"
+cp "$(command -v sleep)" "$vscode_root/2222222222222222222222222222222222222222/node"
+touch -d '2026-01-01 00:00:00' "$vscode_root/1111111111111111111111111111111111111111"
+touch -d '2026-02-01 00:00:00' "$vscode_root/2222222222222222222222222222222222222222"
+touch -d '2026-03-01 00:00:00' "$vscode_root/3333333333333333333333333333333333333333"
+touch -d '2026-04-01 00:00:00' "$vscode_root/4444444444444444444444444444444444444444"
+"$vscode_root/2222222222222222222222222222222222222222/node" 30 &
+vscode_test_pid=$!
+for _ in {1..20}; do
+  [[ $(readlink "/proc/$vscode_test_pid/exe" 2>/dev/null) == "$vscode_root/2222222222222222222222222222222222222222/node" ]] && break
+  sleep 0.05
+done
+vscode_candidates=$(OPS_ROOT="$root" bash -c '
+  source "$OPS_ROOT/lib/common.sh"
+  source "$OPS_ROOT/modules/maintenance.sh"
+  while IFS= read -r -d "" candidate; do basename -- "$candidate"; done \
+    < <(ops_maintenance_vscode_candidates_for_root "$1")
+' _ "$vscode_root")
+kill "$vscode_test_pid"
+wait "$vscode_test_pid" 2>/dev/null || true
+vscode_test_pid=''
+[[ $vscode_candidates == $'1111111111111111111111111111111111111111\n3333333333333333333333333333333333333333' ]]
 "$root/bin/opsctl" tools download-dd --source github --output "$temp/reinstall.sh" --dry-run --yes >/dev/null
 if grep -qi microsoft /proc/version 2>/dev/null; then
   "$root/bin/opsctl" wsl status >/dev/null
