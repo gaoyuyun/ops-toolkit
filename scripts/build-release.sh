@@ -18,7 +18,7 @@ stage=$(mktemp -d "${TMPDIR:-/tmp}/ops-toolkit-release.XXXXXXXX")
 trap 'rm -rf -- "$stage"' EXIT INT TERM
 package=ops-toolkit-v$version
 mkdir -p "$dist" "$stage/$package"
-rm -f "$dist/$package.tar.gz" "$dist/$package.tar.gz.sha256" "$dist/bootstrap.sh"
+rm -f "$dist/$package.tar.gz" "$dist/$package.tar.gz.sha256" "$dist/bootstrap.sh" "$dist/install.sh"
 
 for path in LICENSE README.md SECURITY.md VERSION config.env.example bin lib modules assets tools; do
   cp -R "$root/$path" "$stage/$package/"
@@ -42,5 +42,9 @@ sed \
   -e "s|@VERSION@|$version|g" \
   -e "s|@RELEASE_BASE_URL@|$release_base_url|g" \
   "$root/bootstrap.sh.in" >"$dist/bootstrap.sh"
-chmod 0755 "$dist/bootstrap.sh"
+sed \
+  -e "s|@VERSION@|$version|g" \
+  -e "s|@RELEASE_BASE_URL@|$release_base_url|g" \
+  "$root/install.sh.in" >"$dist/install.sh"
+chmod 0755 "$dist/bootstrap.sh" "$dist/install.sh"
 printf 'Built %s\n' "$dist/$package.tar.gz"

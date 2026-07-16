@@ -19,9 +19,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck shfmt jq
       - name: ShellCheck
-        run: find bin lib modules scripts tests tools -type f \( -name '*.sh' -o -path 'bin/opsctl' \) -print0 | xargs -0 shellcheck
+        run: |
+          shellcheck bootstrap.sh.in install.sh.in
+          find bin lib modules scripts tests tools -type f \( -name '*.sh' -o -path 'bin/opsctl' \) -print0 | xargs -0 shellcheck
       - name: shfmt
-        run: shfmt -d -i 2 -ci bin lib modules scripts tests tools
+        run: shfmt -d -i 2 -ci bootstrap.sh.in install.sh.in bin lib modules scripts tests tools
       - name: Tests and secret scan
         run: tests/run.sh
 
@@ -39,7 +41,12 @@ jobs:
         env:
           RELEASE_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}
         run: scripts/build-release.sh
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
+          fi

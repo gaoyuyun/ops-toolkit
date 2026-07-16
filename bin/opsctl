@@ -2,8 +2,15 @@
 # shellcheck disable=SC1091
 set -Eeuo pipefail
 
-OPS_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+ops_entry=${BASH_SOURCE[0]}
+while [[ -L $ops_entry ]]; do
+  ops_entry_dir=$(cd -- "$(dirname -- "$ops_entry")" && pwd)
+  ops_entry=$(readlink -- "$ops_entry")
+  [[ $ops_entry == /* ]] || ops_entry=$ops_entry_dir/$ops_entry
+done
+OPS_ROOT=$(cd -- "$(dirname -- "$ops_entry")/.." && pwd)
 export OPS_ROOT
+unset ops_entry ops_entry_dir
 
 # shellcheck source=../lib/common.sh
 source "$OPS_ROOT/lib/common.sh"

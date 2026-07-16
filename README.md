@@ -21,21 +21,51 @@
 - Python SOCKS 代理测试工具和 Python 运行时依赖。
 - 授权和再发布范围不明确的原生 Windows 补丁。
 
-## 固定版本启动
+## 一键临时运行
 
-发布前将下面的 `OWNER` 替换为实际 GitHub 组织或用户名：
+始终运行最新正式 Release：
 
 ```bash
-bash <(curl -fsSL https://github.com/OWNER/ops-toolkit/releases/download/v0.1.0/bootstrap.sh) --help
+bash <(curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/latest/download/bootstrap.sh) --help
 ```
 
-该 URL 固定在 tag `v0.1.0`，不会执行持续变化的 `main`。`bootstrap.sh` 只下载同一 release 中的压缩包和 SHA-256 文件，完成校验后解压、调用真实的 `bin/opsctl`，最后清理临时目录。
+锁定到固定版本：
+
+```bash
+bash <(curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.0/bootstrap.sh) --help
+```
+
+`bootstrap.sh` 只下载它所属 Release 中的压缩包和 SHA-256 文件，完成校验后解压、调用真实的 `bin/opsctl`，最后清理临时目录，不会永久安装。
+
+## 一键安装和升级
+
+从最新正式 Release 永久安装；以后重新执行同一命令即可升级：
+
+```bash
+curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/latest/download/install.sh | sudo bash
+```
+
+默认版本目录为 `/opt/ops-toolkit/ops-toolkit-vX.Y.Z`，`/opt/ops-toolkit/current` 指向当前版本，命令入口为 `/usr/local/bin/opsctl`。旧版本目录会保留，便于手动回滚。安装器与 `bootstrap.sh` 一样锁定并校验同一 Release 的压缩包，不执行 `main` 分支内容。
+
+自定义安装位置：
+
+```bash
+curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/latest/download/install.sh -o install.sh
+bash install.sh --prefix "$HOME/.local/opt/ops-toolkit" --bin-dir "$HOME/.local/bin"
+```
+
+安装完成后可直接运行：
+
+```bash
+opsctl --version
+sudo opsctl menu
+```
 
 也可以下载并离线使用：
 
 ```bash
-curl -fSLO https://github.com/OWNER/ops-toolkit/releases/download/v0.1.0/ops-toolkit-v0.1.0.tar.gz
-curl -fSLO https://github.com/OWNER/ops-toolkit/releases/download/v0.1.0/ops-toolkit-v0.1.0.tar.gz.sha256
+curl -fSLO https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.0/ops-toolkit-v0.1.0.tar.gz
+curl -fSLO https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.0/ops-toolkit-v0.1.0.tar.gz.sha256
 sha256sum -c ops-toolkit-v0.1.0.tar.gz.sha256
 tar -xzf ops-toolkit-v0.1.0.tar.gz
 ./ops-toolkit-v0.1.0/bin/opsctl --help
@@ -266,15 +296,15 @@ Mihomo 使用 latest release 的架构资产和 GitHub SHA-256 digest；nvm/uv �
 
 ```bash
 tests/run.sh
-shellcheck bin/opsctl lib/*.sh modules/*.sh scripts/*.sh tests/*.sh
-shfmt -d -i 2 -ci bin/opsctl lib modules scripts tests tools
-RELEASE_BASE_URL=https://github.com/OWNER/ops-toolkit/releases/download/v0.1.0 \
+shellcheck bootstrap.sh.in install.sh.in bin/opsctl lib/*.sh modules/*.sh scripts/*.sh tests/*.sh
+shfmt -d -i 2 -ci bootstrap.sh.in install.sh.in bin/opsctl lib modules scripts tests tools
+RELEASE_BASE_URL=https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.0 \
   scripts/build-release.sh
 ```
 
-CI 会执行 Bash 语法、ShellCheck、shfmt 和公开树密钥扫描，并为 `v*` tag 构建压缩包、SHA-256 与版本化 bootstrap。工具包不依赖 Python。
+CI 会执行 Bash 语法、ShellCheck、shfmt 和公开树密钥扫描，并为 `v*` tag 构建压缩包、SHA-256、临时启动器和安装/升级脚本。工具包不依赖 Python。
 
-升级时改用目标版本的固定 release URL。回滚不需要修改系统内的工具副本：重新运行旧 tag 的 bootstrap，或解压之前保存且校验通过的旧发布包。不要使用 `main` URL 代替版本号。
+临时运行时可重新执行旧 Tag 的 bootstrap 回滚。永久安装时，把 `/opt/ops-toolkit/current` 重新指向保留的旧版本目录即可回滚。不要使用 `main` URL 代替 Release 下载地址。
 
 ## 许可证
 
