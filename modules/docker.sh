@@ -405,44 +405,68 @@ ops_docker_migrate() {
 }
 
 ops_docker_menu() {
-  local choice value extra
+  local choice value
   while true; do
-    printf '\nDocker management\n1) Install  2) Initialize data  3) Add group user  4) Remove group user\n5) List group  6) Backup  7) Restore  8) Migrate  9) Logrotate help  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Docker management' -- \
+      '1|Install' \
+      '2|Initialize data' \
+      '3|Add group user' \
+      '4|Remove group user' \
+      '5|List group' \
+      '6|Backup' \
+      '7|Restore' \
+      '8|Migrate' \
+      '9|Logrotate help' \
+      '0|Back'
     case $choice in
       1)
-        read -r -p 'Source [distro/official/aliyun] (distro): ' value
-        ops_docker_install --source "${value:-distro}"
+        ops_ui_prompt value 'Source [distro/official/aliyun]' 'distro' || continue
+        ops_docker_install --source "$value"
+        ops_ui_pause
         ;;
       2)
-        read -r -p 'Optional user: ' value
+        ops_ui_prompt value 'Optional user' || continue
         if [[ -n $value ]]; then ops_docker_init_data --user "$value"; else ops_docker_init_data; fi
+        ops_ui_pause
         ;;
       3)
-        read -r -p 'User: ' value
+        ops_ui_prompt value 'User' || continue
         [[ -z $value ]] || ops_docker_group_change add "$value"
+        ops_ui_pause
         ;;
       4)
-        read -r -p 'User: ' value
+        ops_ui_prompt value 'User' || continue
         [[ -z $value ]] || ops_docker_group_change remove "$value"
+        ops_ui_pause
         ;;
-      5) getent group "$OPS_DOCKER_GROUP" || true ;;
+      5)
+        getent group "$OPS_DOCKER_GROUP" || true
+        ops_ui_pause
+        ;;
       6)
-        read -r -p "Source ($OPS_DATA_ROOT): " value
-        read -r -p 'Encrypt with GPG? [y/N]: ' extra
-        if [[ $extra == [yY] ]]; then ops_docker_backup --source "${value:-$OPS_DATA_ROOT}" --encrypt; else ops_docker_backup --source "${value:-$OPS_DATA_ROOT}"; fi
+        ops_ui_prompt value 'Source' "$OPS_DATA_ROOT" || continue
+        if ops_ui_confirm 'Encrypt with GPG?'; then
+          ops_docker_backup --source "$value" --encrypt
+        else
+          ops_docker_backup --source "$value"
+        fi
+        ops_ui_pause
         ;;
       7)
-        read -r -p 'Archive: ' value
+        ops_ui_prompt value 'Archive' || continue
         [[ -z $value ]] || ops_docker_restore "$value"
+        ops_ui_pause
         ;;
       8)
-        read -r -p 'Source directory: ' value
+        ops_ui_prompt value 'Source directory' || continue
         [[ -z $value ]] || ops_docker_migrate "$value"
+        ops_ui_pause
         ;;
-      9) ops_logrotate_install ;;
+      9)
+        ops_logrotate_install
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

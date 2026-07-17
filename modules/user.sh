@@ -363,57 +363,81 @@ ops_user_zsh() {
 }
 
 ops_user_menu() {
-  local choice name path answer action=()
+  local choice name path action=() existing_action
   while true; do
-    printf '\nUser management\n1) Normal user  2) Backup user  3) Certificate user\n4) Root password  5) Import SSH key  6) Zsh/P10k  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'User management' -- \
+      '1|Normal user' \
+      '2|Backup user' \
+      '3|Certificate user' \
+      '4|Root password' \
+      '5|Import SSH key' \
+      '6|Zsh/P10k' \
+      '0|Back'
     case $choice in
       1)
-        read -r -p 'User name: ' name
+        ops_ui_prompt name 'User name' || continue
         if [[ -n $name ]]; then
           ops_user_create "$name"
-          read -r -p 'Import an SSH public key now? [Y/n] ' answer
-          if [[ $answer != [nN] ]]; then ops_user_authorized_key "$name"; fi
-          read -r -p 'Install Zsh, P10k and plugins now? [Y/n] ' answer
-          if [[ $answer != [nN] ]]; then ops_user_zsh "$name"; fi
+          if ops_ui_confirm 'Import an SSH public key now?' default_y; then
+            ops_user_authorized_key "$name"
+          fi
+          if ops_ui_confirm 'Install Zsh, P10k and plugins now?' default_y; then
+            ops_user_zsh "$name"
+          fi
           if getent group "$OPS_DOCKER_GROUP" >/dev/null 2>&1; then
-            read -r -p "Add $name to $OPS_DOCKER_GROUP? [Y/n] " answer
-            if [[ $answer != [nN] ]]; then ops_user_add_to_group "$name" "$OPS_DOCKER_GROUP"; fi
+            if ops_ui_confirm "Add $name to $OPS_DOCKER_GROUP?" default_y; then
+              ops_user_add_to_group "$name" "$OPS_DOCKER_GROUP"
+            fi
           fi
         fi
+        ops_ui_pause
         ;;
       2)
-        read -r -p 'User name (nas-backup): ' name
-        name=${name:-nas-backup}
+        ops_ui_prompt name 'User name' 'nas-backup' || continue
         action=()
         if getent passwd "$name" >/dev/null 2>&1; then
-          read -r -p 'Existing user: 1) regenerate key  2) delete and rebuild  0) cancel: ' choice
-          case $choice in 1) action=(--regenerate) ;; 2) action=(--recreate) ;; *) continue ;; esac
+          ops_ui_prompt existing_action 'Existing user: 1) regenerate key  2) delete and rebuild  0) cancel' || continue
+          case $existing_action in
+            1) action=(--regenerate) ;;
+            2) action=(--recreate) ;;
+            *) continue ;;
+          esac
         fi
         ops_user_service_account backup "$name" "${action[@]}"
+        ops_ui_pause
         ;;
       3)
-        read -r -p 'User name (nginx-cert-bot): ' name
-        name=${name:-nginx-cert-bot}
+        ops_ui_prompt name 'User name' 'nginx-cert-bot' || continue
         action=()
         if getent passwd "$name" >/dev/null 2>&1; then
-          read -r -p 'Existing user: 1) regenerate key  2) delete and rebuild  0) cancel: ' choice
-          case $choice in 1) action=(--regenerate) ;; 2) action=(--recreate) ;; *) continue ;; esac
+          ops_ui_prompt existing_action 'Existing user: 1) regenerate key  2) delete and rebuild  0) cancel' || continue
+          case $existing_action in
+            1) action=(--regenerate) ;;
+            2) action=(--recreate) ;;
+            *) continue ;;
+          esac
         fi
         ops_user_service_account cert "$name" "${action[@]}" --cron
+        ops_ui_pause
         ;;
-      4) passwd root ;;
+      4)
+        passwd root
+        ops_ui_pause
+        ;;
       5)
-        read -r -p 'User name: ' name
-        read -r -p 'Public key file (blank to paste): ' path
-        if [[ -n $path ]]; then ops_user_authorized_key "$name" --key-file "$path"; else ops_user_authorized_key "$name"; fi
+        ops_ui_prompt name 'User name' || continue
+        ops_ui_prompt path 'Public key file (blank to paste)' || continue
+        if [[ -n $name ]]; then
+          if [[ -n $path ]]; then ops_user_authorized_key "$name" --key-file "$path"; else ops_user_authorized_key "$name"; fi
+        fi
+        ops_ui_pause
         ;;
       6)
-        read -r -p 'User name, --all, or --skel: ' name
+        ops_ui_prompt name 'User name, --all, or --skel' || continue
         [[ -z $name ]] || ops_user_zsh "$name"
+        ops_ui_pause
         ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

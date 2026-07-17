@@ -121,17 +121,19 @@ ops_system_bbr() {
 }
 
 ops_system_menu() {
-  local choice value extra recreate_answer
+  local choice value extra
   while true; do
-    printf '\nSystem configuration\n1) Hostname  2) Swap  3) BBR  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'System configuration' -- \
+      '1|Hostname' \
+      '2|Swap' \
+      '3|BBR' \
+      '0|Back'
     case $choice in
       1)
-        read -r -p 'New hostname: ' value
+        ops_ui_prompt value 'New hostname' || continue
         if [[ -n $value ]]; then
           if [[ -f /etc/cloud/cloud.cfg ]]; then
-            read -r -p 'Modify cloud-init to preserve hostname? [y/N] ' extra
-            if [[ $extra == [yY] ]]; then
+            if ops_ui_confirm 'Modify cloud-init to preserve hostname?'; then
               ops_system_hostname "$value" --cloud-init
             else
               ops_system_hostname "$value"
@@ -140,20 +142,25 @@ ops_system_menu() {
             ops_system_hostname "$value"
           fi
         fi
+        ops_ui_pause
         ;;
       2)
-        read -r -p 'Swap size (1G): ' value
-        read -r -p 'Swappiness (10): ' extra
+        ops_ui_prompt value 'Swap size' '1G' || continue
+        ops_ui_prompt extra 'Swappiness' '10' || continue
         if [[ -f /swapfile ]]; then
-          read -r -p 'Swapfile exists. Recreate it? [y/N] ' recreate_answer
-          [[ $recreate_answer == [yY] ]] && ops_system_swap "${value:-1G}" --swappiness "${extra:-10}" --recreate
+          if ops_ui_confirm 'Swapfile exists. Recreate it?'; then
+            ops_system_swap "$value" --swappiness "$extra" --recreate
+          fi
         else
-          ops_system_swap "${value:-1G}" --swappiness "${extra:-10}"
+          ops_system_swap "$value" --swappiness "$extra"
         fi
+        ops_ui_pause
         ;;
-      3) ops_system_bbr ;;
+      3)
+        ops_system_bbr
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

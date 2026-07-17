@@ -103,21 +103,46 @@ ops_fail2ban_status() {
 ops_fail2ban_menu() {
   local choice jail
   while true; do
-    printf '\nFail2ban management\n1) Install all rules  2) Configure default  3) Configure sshd\n4) Configure nginx  5) Configure Vaultwarden  6) Overall status  7) Jail status  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Fail2ban management' -- \
+      '1|Install all rules' \
+      '2|Configure default' \
+      '3|Configure sshd' \
+      '4|Configure nginx' \
+      '5|Configure Vaultwarden' \
+      '6|Overall status' \
+      '7|Jail status' \
+      '0|Back'
     case $choice in
-      1) ops_fail2ban_install ;;
-      2) ops_fail2ban_install --only default ;;
-      3) ops_fail2ban_install --only sshd ;;
-      4) ops_fail2ban_install --only nginx ;;
-      5) ops_fail2ban_install --only vaultwarden ;;
-      6) ops_fail2ban_status ;;
+      1)
+        ops_fail2ban_install
+        ops_ui_pause
+        ;;
+      2)
+        ops_fail2ban_install --only default
+        ops_ui_pause
+        ;;
+      3)
+        ops_fail2ban_install --only sshd
+        ops_ui_pause
+        ;;
+      4)
+        ops_fail2ban_install --only nginx
+        ops_ui_pause
+        ;;
+      5)
+        ops_fail2ban_install --only vaultwarden
+        ops_ui_pause
+        ;;
+      6)
+        ops_fail2ban_status
+        ops_ui_pause
+        ;;
       7)
-        read -r -p 'Jail name: ' jail
+        ops_ui_prompt jail 'Jail name' || continue
         [[ -z $jail ]] || ops_fail2ban_status "$jail"
+        ops_ui_pause
         ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

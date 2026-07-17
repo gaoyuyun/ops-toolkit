@@ -284,26 +284,57 @@ ops_maintenance_cleanup() {
 ops_maintenance_menu() {
   local choice days
   while true; do
-    printf '\nSystem cleanup\n1) Analyze  2) All safe categories  3) APT/APK  4) Journal  5) Old logs\n6) Docker resources  7) Docker volumes  8) Old /tmp files  9) Historical VS Code servers  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'System cleanup' -- \
+      '1|Analyze' \
+      '2|All safe categories' \
+      '3|APT/APK' \
+      '4|Journal' \
+      '5|Old logs' \
+      '6|Docker resources' \
+      '7|Docker volumes' \
+      '8|Old /tmp files' \
+      '9|Historical VS Code servers' \
+      '0|Back'
     case $choice in
-      1) ops_maintenance_analyze ;;
-      2) ops_maintenance_cleanup --all ;;
-      3) ops_maintenance_cleanup --apt ;;
+      1)
+        ops_maintenance_analyze
+        ops_ui_pause
+        ;;
+      2)
+        ops_maintenance_cleanup --all
+        ops_ui_pause
+        ;;
+      3)
+        ops_maintenance_cleanup --apt
+        ops_ui_pause
+        ;;
       4)
-        read -r -p 'Keep journal days (3): ' days
-        ops_maintenance_cleanup --journal "${days:-3}"
+        ops_ui_prompt days 'Keep journal days' '3' || continue
+        ops_maintenance_cleanup --journal "$days"
+        ops_ui_pause
         ;;
-      5) ops_maintenance_cleanup --logs ;;
-      6) ops_maintenance_cleanup --docker ;;
-      7) ops_maintenance_cleanup --volumes ;;
+      5)
+        ops_maintenance_cleanup --logs
+        ops_ui_pause
+        ;;
+      6)
+        ops_maintenance_cleanup --docker
+        ops_ui_pause
+        ;;
+      7)
+        ops_maintenance_cleanup --volumes
+        ops_ui_pause
+        ;;
       8)
-        read -r -p 'Delete /tmp older than days (7): ' days
-        ops_maintenance_cleanup --tmp "${days:-7}"
+        ops_ui_prompt days 'Delete /tmp older than days' '7' || continue
+        ops_maintenance_cleanup --tmp "$days"
+        ops_ui_pause
         ;;
-      9) ops_maintenance_cleanup --vscode ;;
+      9)
+        ops_maintenance_cleanup --vscode
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

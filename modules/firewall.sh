@@ -139,31 +139,48 @@ ops_firewall_delete() {
 ops_firewall_menu() {
   local choice value extra
   while true; do
-    printf '\nUFW management\n1) Install/enable  2) Status  3) Allow port\n4) Allow range  5) Allow source IP  6) Delete numbered rule  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'UFW management' -- \
+      '1|Install/enable' \
+      '2|Status' \
+      '3|Allow port' \
+      '4|Allow range' \
+      '5|Allow source IP' \
+      '6|Delete numbered rule' \
+      '0|Back'
     case $choice in
-      1) ops_firewall_install ;;
-      2) ops_firewall_status ;;
+      1)
+        ops_firewall_install
+        ops_ui_pause
+        ;;
+      2)
+        ops_firewall_status
+        ops_ui_pause
+        ;;
       3)
-        read -r -p 'Port[/proto]: ' value
+        ops_ui_prompt value 'Port[/proto]' || continue
         [[ -z $value ]] || ops_firewall_allow "$value"
+        ops_ui_pause
         ;;
       4)
-        read -r -p 'Range (8000:8100): ' value
-        read -r -p 'Protocol (tcp): ' extra
-        ops_firewall_allow --range "$value" --proto "${extra:-tcp}"
+        ops_ui_prompt value 'Range (e.g. 8000:8100)' || continue
+        ops_ui_prompt extra 'Protocol' 'tcp' || continue
+        [[ -z $value ]] || ops_firewall_allow --range "$value" --proto "$extra"
+        ops_ui_pause
         ;;
       5)
-        read -r -p 'Source IP/CIDR: ' value
-        read -r -p 'Optional destination port: ' extra
-        if [[ -n $extra ]]; then ops_firewall_allow --from "$value" --port "$extra"; else ops_firewall_allow --from "$value"; fi
+        ops_ui_prompt value 'Source IP/CIDR' || continue
+        ops_ui_prompt extra 'Optional destination port' || continue
+        if [[ -n $value ]]; then
+          if [[ -n $extra ]]; then ops_firewall_allow --from "$value" --port "$extra"; else ops_firewall_allow --from "$value"; fi
+        fi
+        ops_ui_pause
         ;;
       6)
-        read -r -p 'Rule number: ' value
+        ops_ui_prompt value 'Rule number' || continue
         [[ -z $value ]] || ops_firewall_delete "$value"
+        ops_ui_pause
         ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

@@ -498,46 +498,76 @@ ops_wsl_init_all() {
 
 ops_wsl_menu() {
   ops_wsl_require
-  local choice user windows_user name config_url
+  local choice user windows_user name config_url startup_action default_user
   while true; do
-    printf '\nWSL initialization\n1) Select/status target  2) Install base packages  3) Install Zsh/P10k\n4) Configure clean PATH  5) Startup scripts  6) Install Mihomo\n7) Install nvm/uv/Node  8) Run steps 2-4 and 6-7  9) Enable systemd\n10) Sync Windows SSH  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'WSL initialization' -- \
+      '1|Select/status target' \
+      '2|Install base packages' \
+      '3|Install Zsh/P10k' \
+      '4|Configure clean PATH' \
+      '5|Startup scripts' \
+      '6|Install Mihomo' \
+      '7|Install nvm/uv/Node' \
+      '8|Run steps 2-4 and 6-7' \
+      '9|Enable systemd' \
+      '10|Sync Windows SSH' \
+      '0|Back'
+    default_user=$(ops_wsl_default_user)
     case $choice in
       1)
         ops_wsl_status
-        read -r -p "Target user ($(ops_wsl_default_user)): " user
+        ops_ui_prompt user "Target user (blank keeps $default_user)" || continue
         [[ -z $user ]] || ops_wsl_target_user "$user"
+        ops_ui_pause
         ;;
-      2) ops_wsl_install_base ;;
+      2)
+        ops_wsl_install_base
+        ops_ui_pause
+        ;;
       3)
-        read -r -p "User ($(ops_wsl_default_user)): " user
-        ops_wsl_install_zsh --user "${user:-$(ops_wsl_default_user)}"
+        ops_ui_prompt user 'User' "$default_user" || continue
+        ops_wsl_install_zsh --user "$user"
+        ops_ui_pause
         ;;
       4)
-        read -r -p "Linux user ($(ops_wsl_default_user)): " user
-        read -r -p "Windows user (${user:-$(ops_wsl_default_user)}): " windows_user
-        ops_wsl_clean_path --user "${user:-$(ops_wsl_default_user)}" --windows-user "${windows_user:-${user:-$(ops_wsl_default_user)}}"
+        ops_ui_prompt user 'Linux user' "$default_user" || continue
+        ops_ui_prompt windows_user 'Windows user' "$user" || continue
+        ops_wsl_clean_path --user "$user" --windows-user "$windows_user"
+        ops_ui_pause
         ;;
       5)
-        read -r -p 'Startup action [init/list/enable/disable]: ' choice
-        if [[ $choice == enable || $choice == disable ]]; then
-          read -r -p 'Script name: ' name
-          ops_wsl_startup_main "$choice" "$name"
-        else ops_wsl_startup_main "$choice"; fi
+        ops_ui_prompt startup_action 'Startup action [init/list/enable/disable]' || continue
+        if [[ $startup_action == enable || $startup_action == disable ]]; then
+          ops_ui_prompt name 'Script name' || continue
+          ops_wsl_startup_main "$startup_action" "$name"
+        else
+          ops_wsl_startup_main "$startup_action"
+        fi
+        ops_ui_pause
         ;;
       6)
-        read -r -p 'Optional HTTPS subscription URL: ' config_url
+        ops_ui_prompt config_url 'Optional HTTPS subscription URL' || continue
         if [[ -n $config_url ]]; then ops_wsl_install_mihomo --config-url "$config_url"; else ops_wsl_install_mihomo; fi
+        ops_ui_pause
         ;;
       7)
-        read -r -p "User ($(ops_wsl_default_user)): " user
-        ops_wsl_install_dev --user "${user:-$(ops_wsl_default_user)}"
+        ops_ui_prompt user 'User' "$default_user" || continue
+        ops_wsl_install_dev --user "$user"
+        ops_ui_pause
         ;;
-      8) ops_wsl_init_all ;;
-      9) ops_wsl_enable_systemd ;;
-      10) ops_wsl_sync_ssh ;;
+      8)
+        ops_wsl_init_all
+        ops_ui_pause
+        ;;
+      9)
+        ops_wsl_enable_systemd
+        ops_ui_pause
+        ;;
+      10)
+        ops_wsl_sync_ssh
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

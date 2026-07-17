@@ -269,6 +269,65 @@ wait "$vscode_test_pid" 2>/dev/null || true
 vscode_test_pid=''
 [[ $vscode_candidates == $'1111111111111111111111111111111111111111\n3333333333333333333333333333333333333333' ]]
 "$root/bin/opsctl" tools download-dd --source github --output "$temp/reinstall.sh" --dry-run --yes >/dev/null
+
+# Interactive UI helpers: EOF must soft-cancel prompts (not apply defaults) and menus need a TTY.
+ui_prompt_out=$(
+  OPS_ROOT="$root" bash -c '
+    set -Eeuo pipefail
+    source "$OPS_ROOT/lib/common.sh"
+    source "$OPS_ROOT/lib/platform.sh"
+    source "$OPS_ROOT/lib/ui.sh"
+    if ops_ui_prompt val "Port" "22" </dev/null; then
+      echo prompt_accepted
+      exit 0
+    fi
+    echo "val=${val-}"
+    echo soft_cancelled
+  ' 2>&1
+)
+[[ $ui_prompt_out == *Cancelled* ]]
+[[ $ui_prompt_out == *soft_cancelled* ]]
+[[ $ui_prompt_out != *prompt_accepted* ]]
+[[ $ui_prompt_out == *'val='* && $ui_prompt_out != *'val=22'* ]]
+
+ui_menu_out=$(
+  OPS_ROOT="$root" bash -c '
+    set -Eeuo pipefail
+    source "$OPS_ROOT/lib/common.sh"
+    source "$OPS_ROOT/lib/platform.sh"
+    source "$OPS_ROOT/lib/ui.sh"
+    ops_ui_menu choice "T" -- "1|A" "0|Back" </dev/null
+  ' 2>&1
+) && {
+  echo 'ops_ui_menu accepted a non-interactive terminal' >&2
+  exit 1
+}
+[[ $ui_menu_out == *'interactive terminal'* ]]
+
+# --yes from a helper must not leak after the helper returns (menu safety).
+OPS_ROOT="$root" bash -c '
+  set -Eeuo pipefail
+  source "$OPS_ROOT/lib/common.sh"
+  OPS_ASSUME_YES=0
+  OPS_DRY_RUN=0
+  helper() {
+    local -a args
+    ops_parse_safety_flags args "$@"
+    ((OPS_ASSUME_YES == 1)) || exit 10
+  }
+  helper --yes
+  # Force the DEBUG hook to run after helper returns.
+  true
+  ((OPS_ASSUME_YES == 0)) || {
+    echo "OPS_ASSUME_YES leaked: $OPS_ASSUME_YES" >&2
+    exit 1
+  }
+  ((OPS_DRY_RUN == 0)) || {
+    echo "OPS_DRY_RUN leaked: $OPS_DRY_RUN" >&2
+    exit 1
+  }
+'
+
 if grep -qi microsoft /proc/version 2>/dev/null; then
   "$root/bin/opsctl" wsl status >/dev/null
   "$root/bin/opsctl" wsl target-user "$wsl_test_user" >/dev/null

@@ -46,15 +46,16 @@ ops_tools_download_dd() {
 ops_tools_menu() {
   local choice source
   while true; do
-    printf '\nOther tools\n1) Download reinstall/DD script  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Other tools' -- \
+      '1|Download reinstall/DD script' \
+      '0|Back'
     case $choice in
       1)
-        read -r -p 'Source [github/cnb] (github): ' source
-        ops_tools_download_dd --source "${source:-github}"
+        ops_ui_prompt source 'Source [github/cnb]' 'github' || continue
+        ops_tools_download_dd --source "$source"
+        ops_ui_pause
         ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

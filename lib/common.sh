@@ -123,10 +123,61 @@ ops_validate_absolute_path() {
   [[ $1 =~ ^/[A-Za-z0-9_./*?-]+$ ]] && [[ $1 != *'..'* ]]
 }
 
+# --yes / --dry-run are process globals for one-shot CLI, but long-lived menus
+# must not permanently inherit them. Each ops_parse_safety_flags call pushes the
+# previous values keyed by the caller's FUNCNAME depth; a DEBUG hook pops frames
+# when those callers return.
+OPS_SAFETY_YES_STACK=()
+OPS_SAFETY_DRY_STACK=()
+OPS_SAFETY_DEPTH_STACK=()
+OPS_SAFETY_DEBUG_INSTALLED=0
+
+ops_safety_pop_frame() {
+  local n=${#OPS_SAFETY_DEPTH_STACK[@]}
+  ((n > 0)) || return 0
+  n=$((n - 1))
+  OPS_ASSUME_YES=${OPS_SAFETY_YES_STACK[n]}
+  OPS_DRY_RUN=${OPS_SAFETY_DRY_STACK[n]}
+  if ((n == 0)); then
+    OPS_SAFETY_YES_STACK=()
+    OPS_SAFETY_DRY_STACK=()
+    OPS_SAFETY_DEPTH_STACK=()
+  else
+    OPS_SAFETY_YES_STACK=("${OPS_SAFETY_YES_STACK[@]:0:$n}")
+    OPS_SAFETY_DRY_STACK=("${OPS_SAFETY_DRY_STACK[@]:0:$n}")
+    OPS_SAFETY_DEPTH_STACK=("${OPS_SAFETY_DEPTH_STACK[@]:0:$n}")
+  fi
+}
+
+ops_safety_debug_hook() {
+  # DEBUG runs as its own FUNCNAME frame; compare the caller's remaining depth.
+  local effective=${#FUNCNAME[@]}
+  if [[ ${FUNCNAME[0]-} == ops_safety_debug_hook ]]; then
+    effective=$((effective - 1))
+  fi
+  while ((${#OPS_SAFETY_DEPTH_STACK[@]} > 0)) && ((effective < OPS_SAFETY_DEPTH_STACK[-1])); do
+    ops_safety_pop_frame
+  done
+  return 0
+}
+
 ops_parse_safety_flags() {
   local -n destination=$1
   shift
   destination=()
+
+  # Number of function frames above this helper (the caller and its parents).
+  # When that count shrinks below this value, the caller has returned.
+  local caller_depth=$((${#FUNCNAME[@]} - 1))
+  OPS_SAFETY_YES_STACK+=("$OPS_ASSUME_YES")
+  OPS_SAFETY_DRY_STACK+=("$OPS_DRY_RUN")
+  OPS_SAFETY_DEPTH_STACK+=("$caller_depth")
+
+  if ((OPS_SAFETY_DEBUG_INSTALLED == 0)); then
+    OPS_SAFETY_DEBUG_INSTALLED=1
+    trap 'ops_safety_debug_hook' DEBUG
+  fi
+
   while (($#)); do
     case $1 in
       --dry-run) OPS_DRY_RUN=1 ;;

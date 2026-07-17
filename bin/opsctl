@@ -18,6 +18,8 @@ source "$OPS_ROOT/lib/common.sh"
 source "$OPS_ROOT/lib/platform.sh"
 # shellcheck source=../lib/download.sh
 source "$OPS_ROOT/lib/download.sh"
+# shellcheck source=../lib/ui.sh
+source "$OPS_ROOT/lib/ui.sh"
 # shellcheck source=../modules/user.sh
 source "$OPS_ROOT/modules/user.sh"
 # shellcheck source=../modules/ssh.sh
@@ -98,18 +100,25 @@ ops_platform_main() {
 ops_security_menu() {
   local choice port
   while true; do
-    printf '\nSecurity settings\n1) SSH hardening  2) UFW management  3) Install Fail2ban  4) Fail2ban status  0) Back\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Security settings' -- \
+      '1|SSH hardening' \
+      '2|UFW management' \
+      '3|Install Fail2ban' \
+      '4|Fail2ban status' \
+      '0|Back'
     case $choice in
       1)
-        read -r -p "SSH port ($OPS_DEFAULT_SSH_PORT): " port
-        ops_ssh_harden --port "${port:-$OPS_DEFAULT_SSH_PORT}"
+        ops_ui_prompt port 'SSH port' "$OPS_DEFAULT_SSH_PORT" || continue
+        ops_ssh_harden --port "$port"
+        ops_ui_pause
         ;;
       2) ops_firewall_menu ;;
       3) ops_fail2ban_menu ;;
-      4) ops_fail2ban_status ;;
+      4)
+        ops_fail2ban_status
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }
@@ -122,16 +131,19 @@ ops_menu() {
     ops_alpine_menu
     return
   fi
+  ops_ui_init
   while true; do
-    cat <<'EOF'
-
-1) User management        5) Other tools
-2) System configuration   6) System maintenance
-3) Security settings      7) WSL management
-4) Docker management      8) Xray management
-9) Platform details       0) Exit
-EOF
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Main Menu' "Enter a number, then press Enter${OPS_UI_SEP}0 exits" -- \
+      '1|User management' \
+      '2|System configuration' \
+      '3|Security settings' \
+      '4|Docker management' \
+      '5|Other tools' \
+      '6|System maintenance' \
+      '7|WSL management' \
+      '8|Xray management' \
+      '9|Platform details' \
+      '0|Exit'
     case $choice in
       1) ops_user_menu ;;
       2) ops_system_menu ;;
@@ -139,11 +151,20 @@ EOF
       4) ops_docker_menu ;;
       5) ops_tools_menu ;;
       6) ops_maintenance_menu ;;
-      7) if ((OPS_IS_WSL)); then ops_wsl_menu; else ops_warn 'WSL is not detected.'; fi ;;
+      7)
+        if ((OPS_IS_WSL)); then
+          ops_wsl_menu
+        else
+          ops_warn 'WSL is not detected.'
+          ops_ui_pause
+        fi
+        ;;
       8) ops_xray_menu ;;
-      9) ops_platform_main ;;
+      9)
+        ops_platform_main
+        ops_ui_pause
+        ;;
       0) return 0 ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

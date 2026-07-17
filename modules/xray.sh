@@ -1161,32 +1161,37 @@ ops_xray_reverse_main() {
 ops_xray_reverse_menu() {
   local choice name address output
   while true; do
-    cat <<'EOF'
-
-Reverse connection management
-1) List   2) Add   3) Delete   4) Generate client   0) Back
-EOF
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Reverse connection management' -- \
+      '1|List' \
+      '2|Add' \
+      '3|Delete' \
+      '4|Generate client' \
+      '0|Back'
     case $choice in
-      1) ops_xray_reverse_list ;;
+      1)
+        ops_xray_reverse_list
+        ops_ui_pause
+        ;;
       2)
-        read -r -p 'Connection name: ' name
+        ops_ui_prompt name 'Connection name' || continue
         [[ -z $name ]] || ops_xray_reverse_add "$name"
+        ops_ui_pause
         ;;
       3)
-        read -r -p 'Connection name: ' name
+        ops_ui_prompt name 'Connection name' || continue
         [[ -z $name ]] || ops_xray_reverse_delete "$name"
+        ops_ui_pause
         ;;
       4)
-        read -r -p 'Connection name: ' name
-        read -r -p 'Server address: ' address
-        read -r -p 'Absolute output path: ' output
+        ops_ui_prompt name 'Connection name' || continue
+        ops_ui_prompt address 'Server address' || continue
+        ops_ui_prompt output 'Absolute output path (blank = stdout)' || continue
         if [[ -n $name && -n $address ]]; then
           if [[ -n $output ]]; then ops_xray_reverse_client "$name" --address "$address" --output "$output"; else ops_xray_reverse_client "$name" --address "$address"; fi
         fi
+        ops_ui_pause
         ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }
@@ -1194,58 +1199,74 @@ EOF
 ops_xray_menu() {
   [[ -t 0 ]] || ops_die 'The Xray menu requires an interactive terminal.'
   local choice type server target output domain scanner checker minutes
+  local -a scan_args
   while true; do
-    cat <<'EOF'
-
-Xray advanced management
-1) Generate config      6) Change SNI
-2) View summary         7) Reality scan
-3) View full config     8) Reverse connections
-4) Validate config      9) Rollback
-5) Status / restart     h) Command help
-0) Back
-EOF
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Xray advanced management' 'Enter a number or h for help' -- \
+      '1|Generate config' \
+      '2|View summary' \
+      '3|View full config' \
+      '4|Validate config' \
+      '5|Status / restart' \
+      '6|Change SNI' \
+      '7|Reality scan' \
+      '8|Reverse connections' \
+      '9|Rollback' \
+      'h|Command help' \
+      '0|Back'
     case $choice in
       1)
-        read -r -p 'Template [reality/xhttp/sing-reality] (reality): ' type
-        type=${type:-reality}
-        read -r -p 'Reality server name: ' server
-        read -r -p "Target host:port ($server:443): " target
-        target=${target:-$server:443}
-        read -r -p "Absolute output path ($OPS_XRAY_CONFIG): " output
-        output=${output:-$OPS_XRAY_CONFIG}
+        ops_ui_prompt type 'Template [reality/xhttp/sing-reality]' 'reality' || continue
+        ops_ui_prompt server 'Reality server name' || continue
+        ops_ui_prompt target 'Target host:port' "${server:+$server:443}" || continue
+        ops_ui_prompt output 'Absolute output path' "$OPS_XRAY_CONFIG" || continue
         [[ -z $server ]] || ops_xray_generate "$type" --server-name "$server" --target "$target" --output "$output"
+        ops_ui_pause
         ;;
-      2) ops_xray_view ;;
-      3) ops_xray_view --full ;;
-      4) ops_xray_validate_command ;;
+      2)
+        ops_xray_view
+        ops_ui_pause
+        ;;
+      3)
+        ops_xray_view --full
+        ops_ui_pause
+        ;;
+      4)
+        ops_xray_validate_command
+        ops_ui_pause
+        ;;
       5)
         ops_xray_status
-        ops_confirm 'Restart Xray now?'
-        ops_xray_restart xray --yes
+        if ops_ui_confirm 'Restart Xray now?'; then
+          ops_xray_restart xray --yes
+        fi
+        ops_ui_pause
         ;;
       6)
-        read -r -p 'New SNI domain: ' domain
+        ops_ui_prompt domain 'New SNI domain' || continue
         [[ -z $domain ]] || ops_xray_sni_set "$domain" --restart
+        ops_ui_pause
         ;;
       7)
-        read -r -p 'Target address (auto): ' target
-        target=${target:-auto}
-        read -r -p 'Scanner executable path: ' scanner
-        read -r -p 'Optional checker executable path: ' checker
-        read -r -p 'Scan minutes (3): ' minutes
-        minutes=${minutes:-3}
-        local -a scan_args=(--target "$target" --minutes "$minutes")
+        ops_ui_prompt target 'Target address' 'auto' || continue
+        ops_ui_prompt scanner 'Scanner executable path' || continue
+        ops_ui_prompt checker 'Optional checker executable path' || continue
+        ops_ui_prompt minutes 'Scan minutes' '3' || continue
+        scan_args=(--target "$target" --minutes "$minutes")
         [[ -z $scanner ]] || scan_args+=(--scanner "$scanner")
         [[ -z $checker ]] || scan_args+=(--checker "$checker")
         ops_xray_scan "${scan_args[@]}"
+        ops_ui_pause
         ;;
       8) ops_xray_reverse_menu ;;
-      9) ops_xray_rollback ;;
-      h | H) ops_xray_help ;;
+      9)
+        ops_xray_rollback
+        ops_ui_pause
+        ;;
+      h)
+        ops_xray_help
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }

@@ -54,30 +54,44 @@ ops_alpine_menu() {
   ops_alpine_require
   ops_require_root
   local choice user path port
+  ops_ui_init
   while true; do
-    printf '\nAlpine Linux configuration\n1) Create wheel user  2) Import SSH key  3) Configure SSH\n4) Set Bash shell  5) Download reinstall/DD script  0) Exit\n'
-    read -r -p 'Select: ' choice
+    ops_ui_menu choice 'Alpine Linux configuration' "Enter a number, then press Enter${OPS_UI_SEP}0 exits" -- \
+      '1|Create wheel user' \
+      '2|Import SSH key' \
+      '3|Configure SSH' \
+      '4|Set Bash shell' \
+      '5|Download reinstall/DD script' \
+      '0|Exit'
     case $choice in
       1)
-        read -r -p 'User name: ' user
+        ops_ui_prompt user 'User name' || continue
         [[ -z $user ]] || ops_user_create "$user"
+        ops_ui_pause
         ;;
       2)
-        read -r -p 'User name: ' user
-        read -r -p 'Public key file (blank to paste): ' path
-        if [[ -n $path ]]; then ops_user_authorized_key "$user" --key-file "$path"; else ops_user_authorized_key "$user"; fi
+        ops_ui_prompt user 'User name' || continue
+        ops_ui_prompt path 'Public key file (blank to paste)' || continue
+        if [[ -n $user ]]; then
+          if [[ -n $path ]]; then ops_user_authorized_key "$user" --key-file "$path"; else ops_user_authorized_key "$user"; fi
+        fi
+        ops_ui_pause
         ;;
       3)
-        read -r -p "SSH port ($OPS_DEFAULT_SSH_PORT): " port
-        ops_ssh_harden --port "${port:-$OPS_DEFAULT_SSH_PORT}"
+        ops_ui_prompt port 'SSH port' "$OPS_DEFAULT_SSH_PORT" || continue
+        ops_ssh_harden --port "$port"
+        ops_ui_pause
         ;;
       4)
-        read -r -p 'User (root): ' user
-        ops_alpine_bash "${user:-root}"
+        ops_ui_prompt user 'User' 'root' || continue
+        ops_alpine_bash "$user"
+        ops_ui_pause
         ;;
-      5) ops_tools_download_dd ;;
+      5)
+        ops_tools_download_dd
+        ops_ui_pause
+        ;;
       0) return ;;
-      *) ops_warn 'Invalid selection.' ;;
     esac
   done
 }
