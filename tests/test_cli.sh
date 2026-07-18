@@ -7,7 +7,7 @@ vscode_test_pid=''
 trap '[[ -z ${vscode_test_pid:-} ]] || kill "$vscode_test_pid" 2>/dev/null || true; rm -rf -- "$temp"' EXIT INT TERM
 wsl_test_user=$(id -un)
 
-"$root/bin/opsctl" --version | grep '^opsctl 0\.1\.0' >/dev/null
+"$root/bin/opsctl" --version | grep '^opsctl 0\.1\.1' >/dev/null
 "$root/bin/opsctl" --help | grep 'fail2ban install' >/dev/null
 if "$root/bin/opsctl" --help | grep -i 'proxy\|python' >/dev/null; then
   echo 'removed runtime is still advertised by opsctl' >&2

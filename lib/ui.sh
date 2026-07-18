@@ -6,7 +6,6 @@ fi
 readonly OPS_UI_LOADED=1
 
 OPS_UI_READY=0
-OPS_UI_COLOR=0
 OPS_UI_UTF8=0
 OPS_UI_WIDTH=64
 OPS_UI_RESET=''
@@ -15,7 +14,6 @@ OPS_UI_DIM=''
 OPS_UI_CYAN=''
 OPS_UI_GREEN=''
 OPS_UI_YELLOW=''
-OPS_UI_RED=''
 OPS_UI_BLUE=''
 OPS_UI_SEP=' | '
 OPS_UI_PROMPT_MARK='>'
@@ -50,14 +48,12 @@ ops_ui_update_width() {
 }
 
 ops_ui_init() {
-  local force=${1:-}
-  if ((OPS_UI_READY)) && [[ $force != --force ]]; then
+  if ((OPS_UI_READY)); then
     ops_ui_update_width
     return 0
   fi
 
   OPS_UI_WIDTH=64
-  OPS_UI_COLOR=0
   OPS_UI_UTF8=0
   OPS_UI_RESET=''
   OPS_UI_BOLD=''
@@ -65,7 +61,6 @@ ops_ui_init() {
   OPS_UI_CYAN=''
   OPS_UI_GREEN=''
   OPS_UI_YELLOW=''
-  OPS_UI_RED=''
   OPS_UI_BLUE=''
   OPS_UI_SEP=' | '
   OPS_UI_PROMPT_MARK='>'
@@ -78,14 +73,12 @@ ops_ui_init() {
     if [[ -z ${NO_COLOR:-} && ${OPS_UI_NO_COLOR:-0} != 1 ]]; then
       colors=$(tput colors 2>/dev/null || echo 0)
       if [[ -n ${COLORTERM:-} ]] || { [[ $colors =~ ^[0-9]+$ ]] && ((colors >= 8)); }; then
-        OPS_UI_COLOR=1
         OPS_UI_RESET=$'\033[0m'
         OPS_UI_BOLD=$'\033[1m'
         OPS_UI_DIM=$'\033[2m'
         OPS_UI_CYAN=$'\033[36m'
         OPS_UI_GREEN=$'\033[32m'
         OPS_UI_YELLOW=$'\033[33m'
-        OPS_UI_RED=$'\033[31m'
         OPS_UI_BLUE=$'\033[34m'
       fi
     fi
