@@ -1,5 +1,19 @@
 # Repository Instructions
 
+## Required checks for code changes
+
+After every code change, run and require all of these checks to pass before
+finishing:
+
+```bash
+shellcheck bootstrap.sh.in install.sh.in
+find bin lib modules scripts tests tools -type f \( -name '*.sh' -o -path 'bin/opsctl' \) -print0 | xargs -0 shellcheck
+shfmt -d -i 2 -ci bootstrap.sh.in install.sh.in bin lib modules scripts tests tools
+tests/run.sh
+```
+
+If a required tool is unavailable, report the missing check explicitly.
+
 ## Release and tag checklist
 
 Before creating or moving a `vX.Y.Z` tag:

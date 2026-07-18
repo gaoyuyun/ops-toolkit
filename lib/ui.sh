@@ -185,11 +185,13 @@ ops_ui_menu() {
   local out_var=$1 title=$2
   shift 2
   local hint=''
-  if [[ ${1:-} != -- && ${1:-} != *'|'* && $# -gt 0 ]]; then
-    hint=$1
-    shift
-  fi
   if [[ ${1:-} == -- ]]; then
+    shift
+  elif [[ ${2:-} == -- ]]; then
+    hint=$1
+    shift 2
+  elif [[ ${1:-} != *'|'* && $# -gt 0 ]]; then
+    hint=$1
     shift
   fi
 

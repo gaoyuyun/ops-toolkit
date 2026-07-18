@@ -304,6 +304,23 @@ ui_menu_out=$(
 }
 [[ $ui_menu_out == *'interactive terminal'* ]]
 
+# A non-UTF-8 locale uses " | " in hints. The explicit -- delimiter must
+# take precedence over the legacy KEY|LABEL detection.
+LC_ALL=C OPS_ROOT="$root" bash -c '
+  set -Eeuo pipefail
+  source "$OPS_ROOT/lib/common.sh"
+  source "$OPS_ROOT/lib/platform.sh"
+  source "$OPS_ROOT/lib/ui.sh"
+  ops_ui_init
+  [[ $OPS_UI_SEP == " | " ]]
+  ops_ui_require_tty() { :; }
+  ops_ui_clear() { :; }
+  ops_ui_header() { :; }
+  ops_ui_footer() { :; }
+  ops_ui_menu choice "T" "Enter a number${OPS_UI_SEP}0 exits" -- "1|A" "0|Back" <<<"0" >/dev/null
+  [[ $choice == 0 ]]
+'
+
 # --yes from a helper must not leak after the helper returns (menu safety).
 OPS_ROOT="$root" bash -c '
   set -Eeuo pipefail
