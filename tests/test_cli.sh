@@ -138,12 +138,21 @@ while (($#)); do
   [[ $1 != -out ]] || output=$2
   shift
 done
-printf 'address,server_name\n203.0.113.1,example.org\n' >"$output"
+printf '%s\n' \
+  'IP,ORIGIN,TLS,ALPN,CURVE,CERT_LENGTH,CERT_SIGNATURE,CERT_PUBLICKEY,CERT_DOMAIN,CERT_ISSUER,GEO_CODE' \
+  '203.0.113.1,203.0.113.1,TLS 1.3,h2,X25519,884(certs count: 1),SHA256-RSA,RSA,example.org,"Example, Inc.",US' \
+  '203.0.113.2,203.0.113.2,TLS 1.3,h2,X25519,884(certs count: 1),SHA256-RSA,RSA,service.example.org,"Example, Inc.",US' >"$output"
 EOF
 cat >"$temp/bin/checker" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-echo 'example.org passed'
+[[ $# == 2 && $1 == csv ]]
+mapfile -t csv_lines <"$2"
+[[ ${#csv_lines[@]} == 3 ]]
+[[ ${csv_lines[0]} == 'IP,ORIGIN,CERT_DOMAIN' ]]
+[[ ${csv_lines[1]} == '"203.0.113.1","203.0.113.1","example.org"' ]]
+[[ ${csv_lines[2]} == '"203.0.113.2","203.0.113.2","service.example.org"' ]]
+echo 'example.org and service.example.org passed'
 EOF
 chmod 0700 "$temp/bin/scanner" "$temp/bin/checker"
 auto_output=$(XRAY_CONTAINER_MISSING=1 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray generate reality \

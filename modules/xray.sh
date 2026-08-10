@@ -853,10 +853,56 @@ ops_xray_sni_set() {
   ops_log "Reality SNI updated to $domain"
 }
 
+ops_xray_prepare_checker_csv() {
+  local source=$1 destination=$2
+  awk '
+    BEGIN {
+      FS = ","
+      OFS = ","
+    }
+
+    function csv_quote(value) {
+      gsub(/"/, "\"\"", value)
+      return "\"" value "\""
+    }
+
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        name = $i
+        sub(/\r$/, "", name)
+        gsub(/^"|"$/, "", name)
+        if (name == "IP") {
+          ip_column = i
+        } else if (name == "ORIGIN") {
+          origin_column = i
+        } else if (name == "CERT_DOMAIN") {
+          domain_column = i
+        }
+      }
+      if (!ip_column || !origin_column || !domain_column) {
+        print "Reality scanner CSV is missing IP, ORIGIN, or CERT_DOMAIN" > "/dev/stderr"
+        exit 1
+      }
+      print "IP", "ORIGIN", "CERT_DOMAIN"
+      next
+    }
+
+    NF > 0 {
+      ip = $ip_column
+      origin = $origin_column
+      domain = $domain_column
+      sub(/\r$/, "", ip)
+      sub(/\r$/, "", origin)
+      sub(/\r$/, "", domain)
+      print csv_quote(ip), csv_quote(origin), csv_quote(domain)
+    }
+  ' "$source" >"$destination"
+}
+
 ops_xray_scan() {
   local -a args
   local target=auto scanner=$OPS_XRAY_SCANNER checker=$OPS_XRAY_CHECKER
-  local minutes=3 threads=100 output_dir=$OPS_XRAY_LOG_DIR safe_target csv result status
+  local minutes=3 threads=100 output_dir=$OPS_XRAY_LOG_DIR safe_target csv checker_csv result status
   ops_parse_safety_flags args "$@"
   set -- "${args[@]}"
   while (($#)); do
@@ -930,7 +976,12 @@ ops_xray_scan() {
   }
   chmod 0600 "$csv"
   result=$output_dir/scan_result.txt
-  "$checker" csv "$csv" 2>&1 | sed $'s/\033\[[0-9;]*m//g' | tee "$result"
+  (
+    checker_csv=$(mktemp "$output_dir/.reality-checker.XXXXXX.csv")
+    trap 'rm -f -- "$checker_csv"' EXIT
+    ops_xray_prepare_checker_csv "$csv" "$checker_csv" || ops_die 'Unable to prepare Reality checker CSV input.'
+    "$checker" csv "$checker_csv" 2>&1 | sed $'s/\033\[[0-9;]*m//g' | tee "$result"
+  )
   chmod 0600 "$result"
   ops_xray_apply_shared_permissions "$csv"
   ops_xray_apply_shared_permissions "$result"
