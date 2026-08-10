@@ -2,7 +2,7 @@
 
 `ops-toolkit` 是一个面向 Debian、Ubuntu、Alpine 和 WSL 的模块化运维工具包，提供用户、系统、安全、Docker 数据、维护、WSL、Xray 和 Sing-box 管理能力。
 
-当前版本为 `0.1.1`。入口 `opsctl` 启动时会显示工具版本和检测到的平台；不需要联网的模块在发布包离线解压后可直接运行。
+当前版本为 `0.1.2`。入口 `opsctl` 启动时会显示工具版本和检测到的平台；不需要联网的模块在发布包离线解压后可直接运行。
 
 ## 项目范围
 
@@ -32,7 +32,7 @@ bash <(curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/latest/downlo
 锁定到固定版本：
 
 ```bash
-bash <(curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.1/bootstrap.sh) --help
+bash <(curl -fsSL https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.2/bootstrap.sh) --help
 ```
 
 `bootstrap.sh` 只下载它所属 Release 中的压缩包和 SHA-256 文件，完成校验后解压、调用真实的 `bin/opsctl`，最后清理临时目录，不会永久安装。
@@ -64,11 +64,11 @@ sudo opsctl menu
 也可以下载并离线使用：
 
 ```bash
-curl -fSLO https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.1/ops-toolkit-v0.1.1.tar.gz
-curl -fSLO https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.1/ops-toolkit-v0.1.1.tar.gz.sha256
-sha256sum -c ops-toolkit-v0.1.1.tar.gz.sha256
-tar -xzf ops-toolkit-v0.1.1.tar.gz
-./ops-toolkit-v0.1.1/bin/opsctl --help
+curl -fSLO https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.2/ops-toolkit-v0.1.2.tar.gz
+curl -fSLO https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.2/ops-toolkit-v0.1.2.tar.gz.sha256
+sha256sum -c ops-toolkit-v0.1.2.tar.gz.sha256
+tar -xzf ops-toolkit-v0.1.2.tar.gz
+./ops-toolkit-v0.1.2/bin/opsctl --help
 ```
 
 ## 常用命令
@@ -298,7 +298,7 @@ Mihomo 使用 latest release 的架构资产和 GitHub SHA-256 digest；nvm/uv �
 tests/run.sh
 shellcheck bootstrap.sh.in install.sh.in bin/opsctl lib/*.sh modules/*.sh scripts/*.sh tests/*.sh
 shfmt -d -i 2 -ci bootstrap.sh.in install.sh.in bin/opsctl lib modules scripts tests tools
-RELEASE_BASE_URL=https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.1 \
+RELEASE_BASE_URL=https://github.com/gaoyuyun/ops-toolkit/releases/download/v0.1.2 \
   scripts/build-release.sh
 ```
 
