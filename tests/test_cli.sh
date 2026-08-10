@@ -90,6 +90,12 @@ case ${1:-} in
     [[ ${XRAY_CONTAINER_MISSING:-0} == 0 ]] || exit 1
     if [[ ${2:-} == *State.Running* ]]; then
       echo true
+    elif [[ ${2:-} == *project.working_dir* ]]; then
+      printf '%s\n' "${XRAY_FLEET_WORKDIR:-}"
+    elif [[ ${2:-} == *'.Mounts'* ]]; then
+      if [[ -n ${XRAY_CONFIG_SOURCE:-} ]]; then
+        printf 'bind\t%s\t%s\n' "$XRAY_CONFIG_SOURCE" "${XRAY_CONFIG_DESTINATION:-/usr/local/etc/xray}"
+      fi
     elif [[ ${2:-} == --format=* ]]; then
       echo 'container=/xray status=running'
     fi
@@ -195,6 +201,98 @@ PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray sni set new.example.org \
 jq -e '.inbounds[0].streamSettings.realitySettings.target == "new.example.org:443"' "$temp/auto.json" >/dev/null
 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray rollback --config "$temp/auto.json" --yes
 jq -e '.inbounds[0].streamSettings.realitySettings.target == "example.org:443"' "$temp/auto.json" >/dev/null
+
+fleet_state="$temp/fleet-deployment.json"
+fleet_xray_root="$temp/fleet-data/xray"
+install -d -m 0750 "$fleet_xray_root"
+cp "$temp/auto.json" "$fleet_xray_root/config.json"
+jq '.inbounds[0].streamSettings.realitySettings.serverNames = ["stale.example.org"]' \
+  "$temp/auto.json" >"$temp/stale-fleet.json"
+cat >"$fleet_state" <<'EOF'
+{
+  "schema_version": 1,
+  "host": "azure-us"
+}
+EOF
+fleet_view=$(OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$temp/stale-fleet.json" \
+  XRAY_CONFIG_SOURCE="$fleet_xray_root" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray view)
+[[ $fleet_view == *"config=$fleet_xray_root/config.json"* ]]
+[[ $fleet_view == *'server_name=example.org'* ]]
+fleet_explicit_view=$(OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$temp/missing-fleet.json" \
+  XRAY_CONFIG_SOURCE="$fleet_xray_root" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray view --config "$temp/stale-fleet.json")
+[[ $fleet_explicit_view == *"config=$temp/stale-fleet.json"* ]]
+[[ $fleet_explicit_view == *'server_name=stale.example.org'* ]]
+fleet_status=$(OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$temp/missing-fleet.json" \
+  XRAY_CONFIG_SOURCE="$fleet_xray_root" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray status)
+[[ $fleet_status == *"config=$fleet_xray_root/config.json (valid-json"* ]]
+fleet_help=$(OPS_FLEET_STATE_FILE="$fleet_state" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray --help)
+[[ $fleet_help == *'Docker Fleet manages this Xray host (azure-us)'* ]]
+
+if OPS_FLEET_STATE_FILE="$fleet_state" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray sni set blocked.example.org --config "$temp/auto.json" --yes \
+  >/dev/null 2>"$temp/fleet-sni.err"; then
+  echo 'Fleet-managed SNI mutation was accepted' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*fleet azure-us sni blocked.example.org' "$temp/fleet-sni.err" >/dev/null
+if OPS_FLEET_STATE_FILE="$fleet_state" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray rollback --config "$temp/auto.json" --yes \
+  >/dev/null 2>"$temp/fleet-rollback.err"; then
+  echo 'Fleet-managed rollback was accepted' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*fleet azure-us rollback xray' "$temp/fleet-rollback.err" >/dev/null
+if OPS_FLEET_STATE_FILE="$fleet_state" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray restart xray --dry-run --yes \
+  >/dev/null 2>"$temp/fleet-restart.err"; then
+  echo 'Fleet-managed restart was accepted' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*fleet azure-us plan' "$temp/fleet-restart.err" >/dev/null
+if OPS_FLEET_STATE_FILE="$fleet_state" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray reverse add blocked --config "$temp/auto.json" --yes \
+  >/dev/null 2>"$temp/fleet-reverse.err"; then
+  echo 'Fleet-managed reverse mutation was accepted' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*reverse-add is disabled' "$temp/fleet-reverse.err" >/dev/null
+if OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$fleet_xray_root/config.json" \
+  PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray generate reality \
+  --server-name blocked.example.org --yes >/dev/null 2>"$temp/fleet-generate.err"; then
+  echo 'Fleet-managed server config generation was accepted' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*server-configuration is disabled' "$temp/fleet-generate.err" >/dev/null
+if OPS_FLEET_STATE_FILE="$temp/missing-fleet-state.json" \
+  XRAY_FLEET_WORKDIR=/srv/docker/fleet/current/xray PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray restart xray --dry-run --yes \
+  >/dev/null 2>"$temp/fleet-label.err"; then
+  echo 'Compose-label Fleet detection did not block restart' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*host: unknown' "$temp/fleet-label.err" >/dev/null
+
+fleet_menu_output=$(OPS_ROOT="$root" bash -c '
+  source "$OPS_ROOT/lib/common.sh"
+  source "$OPS_ROOT/modules/xray.sh"
+  ops_ui_menu() {
+    printf "%s\n" "$@"
+    printf -v "$1" 0
+  }
+  ops_xray_fleet_menu azure-us
+')
+[[ $fleet_menu_output == *'Xray observability — Docker Fleet: azure-us'* ]]
+[[ $fleet_menu_output == *'View summary'* ]]
+[[ $fleet_menu_output == *'Status'* ]]
+if grep -E 'Generate config|Change SNI|Status / restart|Reverse connections|Rollback' \
+  <<<"$fleet_menu_output" >/dev/null; then
+  echo 'Fleet Xray menu exposes a mutating operation' >&2
+  exit 1
+fi
 
 XRAY_CONTAINER_MISSING=1 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray scan --target 203.0.113.10 \
   --scanner "$temp/bin/scanner" --checker "$temp/bin/checker" \

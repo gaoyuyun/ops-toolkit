@@ -33,11 +33,99 @@ Runtime management commands use the configured Docker Xray container.
 Generated Xray files use config-lab-compatible mode 0664 and stay outside the
 toolkit tree. UUID/Public Key/Short ID are printed for immediate client setup.
 EOF
+  local fleet_host
+  if fleet_host=$(ops_xray_fleet_host); then
+    printf '\nDocker Fleet manages this Xray host (%s). Mutating runtime commands are disabled here.\n' "$fleet_host"
+    printf 'Use the Fleet controller for SNI, rollback, restart and server configuration changes.\n'
+  fi
 }
 
 ops_xray_container_running() {
   ops_has docker || return 1
   [[ $(docker inspect --format='{{.State.Running}}' "$OPS_XRAY_CONTAINER" 2>/dev/null) == true ]]
+}
+
+ops_xray_fleet_host() {
+  local state=$OPS_FLEET_STATE_FILE host='' workdir='' fleet_root
+  if [[ -f $state && ! -L $state ]]; then
+    host=$(sed -nE 's/^[[:space:]]*"host"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$state")
+    host=${host%%$'\n'*}
+    [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || host=unknown
+    printf '%s\n' "$host"
+    return 0
+  fi
+  if ops_has docker && docker inspect "$OPS_XRAY_CONTAINER" >/dev/null 2>&1; then
+    workdir=$(docker inspect \
+      --format='{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' \
+      "$OPS_XRAY_CONTAINER" 2>/dev/null || true)
+    case $workdir in
+      */fleet/current/xray | */fleet/releases/*/stacks/xray)
+        printf 'unknown\n'
+        return 0
+        ;;
+    esac
+    fleet_root=$(dirname -- "$(dirname -- "$state")")
+    if [[ -e $fleet_root/current/xray || -L $fleet_root/current/xray ]]; then
+      printf 'unknown\n'
+      return 0
+    fi
+  fi
+  return 1
+}
+
+ops_xray_container_config_path() {
+  local type source destination candidate
+  ops_has docker || return 1
+  while IFS=$'\t' read -r type source destination; do
+    [[ $type == bind && $source == /* ]] || continue
+    case $destination in
+      /usr/local/etc/xray | /etc/xray) candidate=$source/config.json ;;
+      /usr/local/etc/xray/config.json | /etc/xray/config.json) candidate=$source ;;
+      *) continue ;;
+    esac
+    ops_validate_absolute_path "$candidate" || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done < <(docker inspect \
+    --format='{{range .Mounts}}{{printf "%s\t%s\t%s\n" .Type .Source .Destination}}{{end}}' \
+    "$OPS_XRAY_CONTAINER" 2>/dev/null)
+  return 1
+}
+
+ops_xray_resolve_read_config() {
+  local configured=$1 explicit=${2:-0} detected
+  if ((explicit)); then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+  if ops_xray_fleet_host >/dev/null && detected=$(ops_xray_container_config_path); then
+    printf '%s\n' "$detected"
+  else
+    printf '%s\n' "$configured"
+  fi
+}
+
+ops_xray_require_standalone_operation() {
+  local operation=$1 value=${2:-} fleet_host display_host hint
+  fleet_host=$(ops_xray_fleet_host) || return 0
+  display_host=$fleet_host
+  [[ $display_host != unknown ]] || display_host='<host>'
+  case $operation in
+    sni) hint="./docker-fleet/bin/fleet $display_host sni $value" ;;
+    rollback) hint="./docker-fleet/bin/fleet $display_host rollback xray" ;;
+    restart) hint="./docker-fleet/bin/fleet $display_host plan && ./docker-fleet/bin/fleet $display_host apply" ;;
+    *) hint="manage the Xray server from Docker Fleet for host $display_host" ;;
+  esac
+  ops_die "Xray is managed by Docker Fleet (host: $fleet_host); $operation is disabled. Use the Fleet controller: $hint"
+}
+
+ops_xray_guard_fleet_config_target() {
+  local target=$1 active=''
+  ops_xray_fleet_host >/dev/null || return 0
+  active=$(ops_xray_container_config_path 2>/dev/null || true)
+  if [[ $target == "$OPS_XRAY_CONFIG" || -n $active && $target == "$active" ]]; then
+    ops_xray_require_standalone_operation server-configuration
+  fi
 }
 
 ops_xray_require_container_exists() {
@@ -541,6 +629,7 @@ ops_xray_generate() {
       *) ops_die "Unknown generate option: $1" ;;
     esac
   done
+  ops_xray_guard_fleet_config_target "$output"
   if [[ $type == sing-reality ]]; then
     ops_ensure_commands 'sing-box configuration generation' 'jq|jq|jq'
     ops_xray_ensure_singbox_binary
@@ -617,13 +706,14 @@ ops_xray_generate() {
 
 ops_xray_validate_command() {
   local -a args
-  local config=$OPS_XRAY_CONFIG engine=auto
+  local config=$OPS_XRAY_CONFIG engine=auto config_explicit=0
   ops_parse_safety_flags args "$@"
   set -- "${args[@]}"
   while (($#)); do
     case $1 in
       --config)
         config=${2:?}
+        config_explicit=1
         shift 2
         ;;
       --engine)
@@ -633,6 +723,7 @@ ops_xray_validate_command() {
       *) ops_die "Unknown validate option: $1" ;;
     esac
   done
+  config=$(ops_xray_resolve_read_config "$config" "$config_explicit")
   ops_xray_ensure_jq
   [[ -f $config && ! -L $config ]] || ops_die "Configuration not found: $config"
   ops_xray_validate_file "$config" "$engine"
@@ -640,16 +731,18 @@ ops_xray_validate_command() {
 }
 
 ops_xray_status() {
-  local config=$OPS_XRAY_CONFIG binary
+  local config=$OPS_XRAY_CONFIG binary config_explicit=0
   while (($#)); do
     case $1 in
       --config)
         config=${2:?}
+        config_explicit=1
         shift 2
         ;;
       *) ops_die "Unknown status option: $1" ;;
     esac
   done
+  config=$(ops_xray_resolve_read_config "$config" "$config_explicit")
   if binary=$(ops_xray_host_binary); then
     printf 'local_xray=%s\n' "$binary"
     printf 'local_xray_version='
@@ -684,13 +777,14 @@ ops_xray_status() {
 
 ops_xray_view() {
   local -a args
-  local config=$OPS_XRAY_CONFIG full=0 private_key public_key='' file_size file_mtime
+  local config=$OPS_XRAY_CONFIG full=0 private_key public_key='' file_size file_mtime config_explicit=0
   ops_parse_safety_flags args "$@"
   set -- "${args[@]}"
   while (($#)); do
     case $1 in
       --config)
         config=${2:?}
+        config_explicit=1
         shift 2
         ;;
       --full)
@@ -700,6 +794,7 @@ ops_xray_view() {
       *) ops_die "Unknown view option: $1" ;;
     esac
   done
+  config=$(ops_xray_resolve_read_config "$config" "$config_explicit")
   ops_xray_ensure_jq
   [[ -f $config && ! -L $config ]] || ops_die "Configuration not found: $config"
   if ((full)); then
@@ -729,6 +824,7 @@ ops_xray_view() {
 ops_xray_restart() {
   local -a args containers
   local scope=xray container
+  ops_xray_require_standalone_operation restart
   ops_parse_safety_flags args "$@"
   ((${#args[@]} <= 1)) || ops_die 'Usage: opsctl xray restart [xray|all]'
   ((${#args[@]} == 0)) || scope=${args[0]}
@@ -752,6 +848,7 @@ ops_xray_restart() {
 ops_xray_rollback() {
   local -a args
   local config=$OPS_XRAY_CONFIG restart=0 current
+  ops_xray_require_standalone_operation rollback
   ops_parse_safety_flags args "$@"
   set -- "${args[@]}"
   while (($#)); do
@@ -817,6 +914,7 @@ ops_xray_sni_set() {
   done
   ops_xray_ensure_jq
   [[ $domain =~ ^[A-Za-z0-9.-]+$ ]] || ops_die 'Invalid SNI domain.'
+  ops_xray_require_standalone_operation sni "$domain"
   [[ -f $config && ! -L $config ]] || ops_die "Configuration not found: $config"
   ops_confirm "Change Reality SNI to $domain?"
   temp=$(mktemp)
@@ -1006,18 +1104,20 @@ ops_xray_mask_uuid() {
 
 ops_xray_reverse_list() {
   local -a args
-  local config=$OPS_XRAY_CONFIG name tag portal_uuid bridge_uuid found=0
+  local config=$OPS_XRAY_CONFIG name tag portal_uuid bridge_uuid found=0 config_explicit=0
   ops_parse_safety_flags args "$@"
   set -- "${args[@]}"
   while (($#)); do
     case $1 in
       --config)
         config=${2:?}
+        config_explicit=1
         shift 2
         ;;
       *) ops_die "Unknown reverse list option: $1" ;;
     esac
   done
+  config=$(ops_xray_resolve_read_config "$config" "$config_explicit")
   ops_xray_ensure_jq
   ops_xray_reverse_require_config "$config"
   while IFS=$'\t' read -r name tag portal_uuid; do
@@ -1051,6 +1151,7 @@ ops_xray_reverse_add() {
   done
   ops_xray_ensure_jq
   [[ $name =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || ops_die 'Reverse name may contain only letters, digits, dot, underscore and hyphen.'
+  ops_xray_require_standalone_operation reverse-add
   ops_xray_reverse_require_config "$config"
   jq -e --arg name "$name" '[.inbounds[0].settings.clients[] | select(.email == $name)] | length == 0' "$config" >/dev/null || ops_die "Reverse name already exists: $name"
   ops_confirm "Add reverse connection '$name'?"
@@ -1106,6 +1207,7 @@ ops_xray_reverse_delete() {
     esac
   done
   ops_xray_ensure_jq
+  ops_xray_require_standalone_operation reverse-delete
   ops_xray_reverse_require_config "$config"
   tag=$(jq -r --arg name "$name" '.inbounds[0].settings.clients[] | select(.email == $name and .reverse != null) | .reverse.tag' "$config")
   [[ -n $tag ]] || ops_die "Reverse connection not found: $name"
@@ -1127,7 +1229,7 @@ ops_xray_reverse_delete() {
 
 ops_xray_reverse_client() {
   local -a args
-  local name=${1:-} config=$OPS_XRAY_CONFIG address='' output='' uuid tag private_key public_key server_name short_id port temp
+  local name=${1:-} config=$OPS_XRAY_CONFIG address='' output='' uuid tag private_key public_key server_name short_id port temp config_explicit=0
   [[ -n $name ]] || ops_die 'A reverse connection name is required.'
   shift || true
   ops_parse_safety_flags args "$@"
@@ -1136,6 +1238,7 @@ ops_xray_reverse_client() {
     case $1 in
       --config)
         config=${2:?}
+        config_explicit=1
         shift 2
         ;;
       --address)
@@ -1149,6 +1252,7 @@ ops_xray_reverse_client() {
       *) ops_die "Unknown reverse client option: $1" ;;
     esac
   done
+  config=$(ops_xray_resolve_read_config "$config" "$config_explicit")
   ops_xray_ensure_jq
   [[ -n $address ]] || ops_die '--address is required.'
   [[ $address =~ ^[A-Za-z0-9:.-]+$ ]] || ops_die 'Invalid server address.'
@@ -1247,10 +1351,22 @@ ops_xray_reverse_menu() {
   done
 }
 
-ops_xray_menu() {
-  [[ -t 0 ]] || ops_die 'The Xray menu requires an interactive terminal.'
-  local choice type server target output domain scanner checker minutes
+ops_xray_menu_scan() {
+  local target scanner checker minutes
   local -a scan_args
+  ops_ui_prompt target 'Target address' 'auto' || return 0
+  ops_ui_prompt scanner 'Scanner executable path' || return 0
+  ops_ui_prompt checker 'Optional checker executable path' || return 0
+  ops_ui_prompt minutes 'Scan minutes' '3' || return 0
+  scan_args=(--target "$target" --minutes "$minutes")
+  [[ -z $scanner ]] || scan_args+=(--scanner "$scanner")
+  [[ -z $checker ]] || scan_args+=(--checker "$checker")
+  ops_xray_scan "${scan_args[@]}"
+  ops_ui_pause
+}
+
+ops_xray_standalone_menu() {
+  local choice type server target output domain
   while true; do
     ops_ui_menu choice 'Xray advanced management' 'Enter a number or h for help' -- \
       '1|Generate config' \
@@ -1298,15 +1414,7 @@ ops_xray_menu() {
         ops_ui_pause
         ;;
       7)
-        ops_ui_prompt target 'Target address' 'auto' || continue
-        ops_ui_prompt scanner 'Scanner executable path' || continue
-        ops_ui_prompt checker 'Optional checker executable path' || continue
-        ops_ui_prompt minutes 'Scan minutes' '3' || continue
-        scan_args=(--target "$target" --minutes "$minutes")
-        [[ -z $scanner ]] || scan_args+=(--scanner "$scanner")
-        [[ -z $checker ]] || scan_args+=(--checker "$checker")
-        ops_xray_scan "${scan_args[@]}"
-        ops_ui_pause
+        ops_xray_menu_scan
         ;;
       8) ops_xray_reverse_menu ;;
       9)
@@ -1320,6 +1428,54 @@ ops_xray_menu() {
       0) return ;;
     esac
   done
+}
+
+ops_xray_fleet_menu() {
+  local fleet_host=$1 choice
+  while true; do
+    ops_ui_menu choice "Xray observability — Docker Fleet: $fleet_host" 'Enter a number or h for help' -- \
+      '1|View summary' \
+      '2|View full config' \
+      '3|Validate config' \
+      '4|Status' \
+      '5|Reality scan' \
+      'h|Command help' \
+      '0|Back'
+    case $choice in
+      1)
+        ops_xray_view
+        ops_ui_pause
+        ;;
+      2)
+        ops_xray_view --full
+        ops_ui_pause
+        ;;
+      3)
+        ops_xray_validate_command
+        ops_ui_pause
+        ;;
+      4)
+        ops_xray_status
+        ops_ui_pause
+        ;;
+      5) ops_xray_menu_scan ;;
+      h)
+        ops_xray_help
+        ops_ui_pause
+        ;;
+      0) return ;;
+    esac
+  done
+}
+
+ops_xray_menu() {
+  local fleet_host
+  [[ -t 0 ]] || ops_die 'The Xray menu requires an interactive terminal.'
+  if fleet_host=$(ops_xray_fleet_host); then
+    ops_xray_fleet_menu "$fleet_host"
+  else
+    ops_xray_standalone_menu
+  fi
 }
 
 ops_xray_main() {

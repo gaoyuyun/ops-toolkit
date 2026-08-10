@@ -191,7 +191,7 @@ ops_parse_safety_flags() {
 ops_config_set() {
   local key=$1 value=$2
   case $key in
-    OPS_DATA_ROOT | OPS_NGINX_LOG_PATH | OPS_VAULTWARDEN_LOG_PATH | OPS_XRAY_CONFIG | OPS_NGINX_STREAM_CONFIG | OPS_XRAY_LOG_DIR | OPS_BIN_DIR | OPS_XRAY_BIN | OPS_SING_BOX_BIN | OPS_XRAY_SCANNER | OPS_XRAY_CHECKER)
+    OPS_DATA_ROOT | OPS_NGINX_LOG_PATH | OPS_VAULTWARDEN_LOG_PATH | OPS_XRAY_CONFIG | OPS_NGINX_STREAM_CONFIG | OPS_XRAY_LOG_DIR | OPS_FLEET_STATE_FILE | OPS_BIN_DIR | OPS_XRAY_BIN | OPS_SING_BOX_BIN | OPS_XRAY_SCANNER | OPS_XRAY_CHECKER)
       ops_validate_absolute_path "$value" || ops_die "Invalid path for $key"
       ;;
     OPS_DOCKER_GROUP)
@@ -244,6 +244,7 @@ ops_load_config() {
   : "${OPS_XRAY_CONFIG:=$OPS_DATA_ROOT/xray/config.json}"
   : "${OPS_NGINX_STREAM_CONFIG:=$OPS_DATA_ROOT/nginx/conf.d/default.stream}"
   : "${OPS_XRAY_LOG_DIR:=$OPS_DATA_ROOT/xray}"
+  : "${OPS_FLEET_STATE_FILE:=/srv/docker/fleet/state/deployment.json}"
   if [[ -z ${OPS_BIN_DIR:-} ]]; then
     if ((EUID == 0)); then
       OPS_BIN_DIR=/usr/local/bin
@@ -266,6 +267,7 @@ ops_load_config() {
   ops_config_set OPS_XRAY_CONFIG "$OPS_XRAY_CONFIG"
   ops_config_set OPS_NGINX_STREAM_CONFIG "$OPS_NGINX_STREAM_CONFIG"
   ops_config_set OPS_XRAY_LOG_DIR "$OPS_XRAY_LOG_DIR"
+  ops_config_set OPS_FLEET_STATE_FILE "$OPS_FLEET_STATE_FILE"
   ops_config_set OPS_BIN_DIR "$OPS_BIN_DIR"
   ops_config_set OPS_XRAY_BIN "$OPS_XRAY_BIN"
   ops_config_set OPS_SING_BOX_BIN "$OPS_SING_BOX_BIN"

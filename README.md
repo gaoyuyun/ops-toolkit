@@ -138,6 +138,7 @@ OPS_NGINX_CONTAINER=nginx
 OPS_XRAY_CONFIG=/srv/docker/xray/config.json
 OPS_NGINX_STREAM_CONFIG=/srv/docker/nginx/conf.d/default.stream
 OPS_XRAY_LOG_DIR=/srv/docker/xray
+OPS_FLEET_STATE_FILE=/srv/docker/fleet/state/deployment.json
 ```
 
 普通用户的本地工具默认安装到 `~/.local/bin`，root 默认安装到 `/usr/local/bin`。只有需要覆盖时才在配置文件中设置 `OPS_BIN_DIR`/`OPS_XRAY_BIN` 等绝对路径。
@@ -194,6 +195,17 @@ Xray 模块分为两条独立路径：
 
 - 本地工具链：配置生成和 Reality 扫描。缺少二进制时提示下载并安装到标准 bin 目录；普通用户默认 `~/.local/bin`，root 默认 `/usr/local/bin`。
 - Docker 运行时管理：状态/校验、配置查看、容器重启、SNI、回滚和反向连接。它要求 `OPS_XRAY_CONTAINER` 指定的容器存在并正在运行，但不会创建容器。
+
+当 `/srv/docker/fleet/state/deployment.json` 或 Xray 容器的 Compose 工作目录表明该主机由 Docker Fleet 管理时，交互菜单会自动切换为只读观测模式，只保留查看、校验、状态和 Reality 扫描。工具会从容器 bind mount 解析实际的 `config.json`，因此兼容 Fleet 的 `/srv/docker/data/xray/config.json`。SNI、回滚、直接重启以及反向连接增删会被拒绝；这些操作应在 Fleet 控制机完成，例如：
+
+```bash
+./docker-fleet/bin/fleet <host> sni new.example.org
+./docker-fleet/bin/fleet <host> plan
+./docker-fleet/bin/fleet <host> apply
+./docker-fleet/bin/fleet <host> rollback xray
+```
+
+`OPS_FLEET_STATE_FILE` 可用于覆盖 Fleet deployment marker 的位置。非 Fleet 主机保持完整的独立管理菜单和 CLI 行为。
 
 ```bash
 bin/opsctl xray --help
