@@ -7,7 +7,14 @@ status=0
 scan() {
   local description=$1 pattern=$2
   shift 2
-  if rg -n -i --glob '!GOAL.md' --glob '!tests/**' --glob '!scripts/scan-secrets.sh' "$pattern" "$@" >/dev/null; then
+  local found=1
+  if command -v rg >/dev/null 2>&1; then
+    rg -n -i --glob '!GOAL.md' --glob '!tests/**' --glob '!scripts/scan-secrets.sh' "$pattern" "$@" >/dev/null && found=0
+  else
+    grep -rEIin --exclude-dir=.git --exclude-dir=dist --exclude-dir=tests \
+      --exclude=GOAL.md --exclude=scan-secrets.sh -e "$pattern" "$@" >/dev/null && found=0
+  fi
+  if ((found == 0)); then
     printf 'Potential secret found: %s\n' "$description" >&2
     status=1
   fi

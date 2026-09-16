@@ -224,8 +224,50 @@ ops_load_config_file() {
   done <"$file"
 }
 
+# Docker Fleet keeps its management tree next to the data root:
+#   /srv/docker/data    bind-mounted stack data (OPS_DATA_ROOT)
+#   /srv/docker/fleet   releases/, current/, previous/, state/deployment.json
+#   /srv/docker/env     per-stack environment files (0600)
+#   /srv/docker/backup  Fleet-managed stack backups
+ops_fleet_root() {
+  dirname -- "$(dirname -- "$OPS_FLEET_STATE_FILE")"
+}
+
+# Prints the Fleet host name (or "unknown") when this machine carries Docker
+# Fleet management state. Returns 1 on standalone hosts.
+ops_fleet_host() {
+  local state=$OPS_FLEET_STATE_FILE host='' root
+  if [[ -f $state && ! -L $state ]]; then
+    host=$(sed -nE 's/^[[:space:]]*"host"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$state")
+    host=${host%%$'\n'*}
+    [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || host=unknown
+    printf '%s\n' "$host"
+    return 0
+  fi
+  root=$(ops_fleet_root)
+  if [[ -d $root/current && -d $root/releases ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  return 1
+}
+
+ops_fleet_display_host() {
+  local host=$1
+  [[ $host != unknown ]] || host='<host>'
+  printf '%s\n' "$host"
+}
+
+# Refuses Docker data mutations that would bypass the Fleet desired state.
+ops_fleet_require_standalone() {
+  local operation=$1 fleet_host display_host
+  fleet_host=$(ops_fleet_host) || return 0
+  display_host=$(ops_fleet_display_host "$fleet_host")
+  ops_die "Docker data on this host is managed by Docker Fleet (host: $fleet_host); $operation is disabled. Use the Fleet controller: ./docker-fleet/bin/fleet $display_host plan && ./docker-fleet/bin/fleet $display_host apply (backup <stack> / rollback <stack> for data recovery)"
+}
+
 ops_load_config() {
-  : "${OPS_DATA_ROOT:=/srv/docker}"
+  : "${OPS_DATA_ROOT:=/srv/docker/data}"
   : "${OPS_DOCKER_GROUP:=docker-data}"
   : "${OPS_DEFAULT_SSH_PORT:=22}"
   : "${OPS_XRAY_CONTAINER:=xray}"
@@ -243,7 +285,9 @@ ops_load_config() {
 
   : "${OPS_XRAY_CONFIG:=$OPS_DATA_ROOT/xray/config.json}"
   : "${OPS_NGINX_STREAM_CONFIG:=$OPS_DATA_ROOT/nginx/conf.d/default.stream}"
-  : "${OPS_XRAY_LOG_DIR:=$OPS_DATA_ROOT/xray}"
+  # Scan artifacts stay outside the Fleet-owned xray bind directory, whose
+  # 2750/0640 contract must not be rewritten by the toolkit.
+  : "${OPS_XRAY_LOG_DIR:=$OPS_DATA_ROOT/ops-toolkit/xray}"
   : "${OPS_FLEET_STATE_FILE:=/srv/docker/fleet/state/deployment.json}"
   if [[ -z ${OPS_BIN_DIR:-} ]]; then
     if ((EUID == 0)); then

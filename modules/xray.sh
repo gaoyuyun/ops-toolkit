@@ -46,11 +46,8 @@ ops_xray_container_running() {
 }
 
 ops_xray_fleet_host() {
-  local state=$OPS_FLEET_STATE_FILE host='' workdir='' fleet_root
-  if [[ -f $state && ! -L $state ]]; then
-    host=$(sed -nE 's/^[[:space:]]*"host"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$state")
-    host=${host%%$'\n'*}
-    [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || host=unknown
+  local host workdir=''
+  if host=$(ops_fleet_host); then
     printf '%s\n' "$host"
     return 0
   fi
@@ -64,11 +61,6 @@ ops_xray_fleet_host() {
         return 0
         ;;
     esac
-    fleet_root=$(dirname -- "$(dirname -- "$state")")
-    if [[ -e $fleet_root/current/xray || -L $fleet_root/current/xray ]]; then
-      printf 'unknown\n'
-      return 0
-    fi
   fi
   return 1
 }
@@ -108,8 +100,7 @@ ops_xray_resolve_read_config() {
 ops_xray_require_standalone_operation() {
   local operation=$1 value=${2:-} fleet_host display_host hint
   fleet_host=$(ops_xray_fleet_host) || return 0
-  display_host=$fleet_host
-  [[ $display_host != unknown ]] || display_host='<host>'
+  display_host=$(ops_fleet_display_host "$fleet_host")
   case $operation in
     sni) hint="./docker-fleet/bin/fleet $display_host sni $value" ;;
     rollback) hint="./docker-fleet/bin/fleet $display_host rollback xray" ;;
@@ -119,12 +110,40 @@ ops_xray_require_standalone_operation() {
   ops_die "Xray is managed by Docker Fleet (host: $fleet_host); $operation is disabled. Use the Fleet controller: $hint"
 }
 
+# Fleet owns the whole xray bind directory (2750/0640, uid 65532). Any file the
+# toolkit writes there would trigger the shared-permission rewrite and create
+# drift, so guard the directories rather than just the active config path.
+ops_xray_fleet_data_dirs() {
+  local active
+  dirname -- "$OPS_XRAY_CONFIG"
+  if active=$(ops_xray_container_config_path 2>/dev/null); then
+    dirname -- "$active"
+  fi
+}
+
+ops_xray_path_in_fleet_data() {
+  local target=$1 root
+  while IFS= read -r root; do
+    case $target in
+      "$root" | "$root"/*) return 0 ;;
+    esac
+  done < <(ops_xray_fleet_data_dirs)
+  return 1
+}
+
 ops_xray_guard_fleet_config_target() {
-  local target=$1 active=''
+  local target=$1
   ops_xray_fleet_host >/dev/null || return 0
-  active=$(ops_xray_container_config_path 2>/dev/null || true)
-  if [[ $target == "$OPS_XRAY_CONFIG" || -n $active && $target == "$active" ]]; then
+  if ops_xray_path_in_fleet_data "$target"; then
     ops_xray_require_standalone_operation server-configuration
+  fi
+}
+
+ops_xray_guard_fleet_write() {
+  local target=$1 what=$2 fleet_host
+  fleet_host=$(ops_xray_fleet_host) || return 0
+  if ops_xray_path_in_fleet_data "$target"; then
+    ops_die "$what cannot be written inside the Docker Fleet Xray data directory (host: $fleet_host): $target. Choose a path outside it."
   fi
 }
 
@@ -229,7 +248,7 @@ ops_xray_install_host_binary() {
     rm -rf "$temp"
     ops_die 'Downloaded Xray binary failed its version check.'
   }
-  install -d -m 0755 "$parent"
+  ops_xray_ensure_dir "$parent" 0755
   if [[ -f $OPS_XRAY_BIN && ! -L $OPS_XRAY_BIN ]]; then
     cp -p "$OPS_XRAY_BIN" "$OPS_XRAY_BIN.bak"
   fi
@@ -269,7 +288,7 @@ ops_xray_install_singbox_binary() {
     rm -rf "$temp"
     ops_die 'The sing-box archive did not contain an executable.'
   }
-  install -d -m 0755 "$(dirname -- "$OPS_SING_BOX_BIN")"
+  ops_xray_ensure_dir "$(dirname -- "$OPS_SING_BOX_BIN")" 0755
   [[ ! -f $OPS_SING_BOX_BIN ]] || cp -p "$OPS_SING_BOX_BIN" "$OPS_SING_BOX_BIN.bak"
   install -m 0755 "$binary" "$OPS_SING_BOX_BIN"
   rm -rf "$temp"
@@ -345,7 +364,8 @@ ops_xray_install_scan_tools() {
   ops_download "$checker_url" "$temp/$checker_asset"
   ops_verify_sha256 "$temp/$checker_asset" "${checker_digest,,}"
   unzip -q "$temp/$checker_asset" reality-checker -d "$temp/checker"
-  install -d -m 0755 "$(dirname -- "$OPS_XRAY_SCANNER")" "$(dirname -- "$OPS_XRAY_CHECKER")"
+  ops_xray_ensure_dir "$(dirname -- "$OPS_XRAY_SCANNER")" 0755
+  ops_xray_ensure_dir "$(dirname -- "$OPS_XRAY_CHECKER")" 0755
   install -m 0755 "$temp/$scanner_asset" "$OPS_XRAY_SCANNER"
   install -m 0755 "$temp/checker/reality-checker" "$OPS_XRAY_CHECKER"
   rm -rf "$temp"
@@ -363,26 +383,45 @@ ops_xray_assert_external_path() {
 }
 
 ops_xray_apply_shared_permissions() {
-  local file=$1 parent managed_root='' xray_root
+  local file=$1 parent managed_root='' xray_root adjust_parent=0
   [[ -f $file && ! -L $file ]] || return 0
   parent=$(dirname -- "$file")
   xray_root=$(dirname -- "$OPS_XRAY_CONFIG")
   case $file in
-    "$xray_root" | "$xray_root"/*) managed_root=$xray_root ;;
-    "$OPS_XRAY_LOG_DIR" | "$OPS_XRAY_LOG_DIR"/*) managed_root=$OPS_XRAY_LOG_DIR ;;
+    "$xray_root"/*) managed_root=$xray_root ;;
+    "$OPS_XRAY_LOG_DIR"/*) managed_root=$OPS_XRAY_LOG_DIR ;;
+    "$OPS_DATA_ROOT"/*) adjust_parent=1 ;;
   esac
+  # Never recurse over the whole Docker data root (or an ancestor of it) just
+  # because OPS_XRAY_CONFIG/OPS_XRAY_LOG_DIR were pointed at it.
+  if [[ -n $managed_root ]]; then
+    case $OPS_DATA_ROOT in
+      "$managed_root" | "$managed_root"/*)
+        managed_root=''
+        adjust_parent=1
+        ;;
+    esac
+  fi
   if getent group "$OPS_DOCKER_GROUP" >/dev/null 2>&1; then
     if [[ -n $managed_root ]]; then
       chgrp -R "$OPS_DOCKER_GROUP" "$managed_root" 2>/dev/null || ops_warn "Could not assign group $OPS_DOCKER_GROUP to $managed_root"
-    else
+    elif ((adjust_parent)); then
       chgrp "$OPS_DOCKER_GROUP" "$file" "$parent" 2>/dev/null || ops_warn "Could not assign group $OPS_DOCKER_GROUP to $file"
+    else
+      chgrp "$OPS_DOCKER_GROUP" "$file" 2>/dev/null || ops_warn "Could not assign group $OPS_DOCKER_GROUP to $file"
     fi
   elif ((EUID == 0)); then
     case $OPS_OS_FAMILY in
       debian) groupadd --system "$OPS_DOCKER_GROUP" ;;
       alpine) addgroup -S "$OPS_DOCKER_GROUP" ;;
     esac
-    if [[ -n $managed_root ]]; then chgrp -R "$OPS_DOCKER_GROUP" "$managed_root"; else chgrp "$OPS_DOCKER_GROUP" "$file" "$parent"; fi
+    if [[ -n $managed_root ]]; then
+      chgrp -R "$OPS_DOCKER_GROUP" "$managed_root"
+    elif ((adjust_parent)); then
+      chgrp "$OPS_DOCKER_GROUP" "$file" "$parent"
+    else
+      chgrp "$OPS_DOCKER_GROUP" "$file"
+    fi
   else
     ops_warn "Group $OPS_DOCKER_GROUP does not exist; preserving the current group."
   fi
@@ -390,9 +429,18 @@ ops_xray_apply_shared_permissions() {
     find "$managed_root" -type d -exec chmod 2775 {} +
     find "$managed_root" -type f -exec chmod 0664 {} +
   else
-    chmod 2775 "$parent"
+    # Only directories under the Docker data root take the shared 2775 mode;
+    # arbitrary parents such as /tmp or a home directory are left untouched.
+    ((adjust_parent == 0)) || chmod 2775 "$parent"
     chmod 0664 "$file"
   fi
+}
+
+# install -d also rewrites the mode of an existing directory, so only create
+# missing parents and leave existing ones (e.g. /tmp, $HOME, /usr/local/bin) alone.
+ops_xray_ensure_dir() {
+  local directory=$1 mode=$2
+  [[ -d $directory ]] || install -d -m "$mode" "$directory"
 }
 
 ops_xray_set_value() {
@@ -525,7 +573,7 @@ ops_xray_commit_json() {
   fi
   parent=$(dirname -- "$target")
   if [[ -f $target && ! -L $target ]]; then original_owner=$(stat -c '%u:%g' "$target"); fi
-  install -d -m 0750 "$parent"
+  ops_xray_ensure_dir "$parent" 0750
   stage=$(mktemp "$parent/.ops-xray.XXXXXX")
   install -m 0664 "$source" "$stage"
   rm -f "$source"
@@ -548,7 +596,7 @@ ops_xray_commit_text() {
   fi
   parent=$(dirname -- "$target")
   if [[ -f $target && ! -L $target ]]; then original_owner=$(stat -c '%u:%g' "$target"); fi
-  install -d -m 0750 "$parent"
+  ops_xray_ensure_dir "$parent" 0750
   stage=$(mktemp "$parent/.ops-xray.XXXXXX")
   install -m 0664 "$source" "$stage"
   rm -f "$source"
@@ -630,6 +678,7 @@ ops_xray_generate() {
     esac
   done
   ops_xray_guard_fleet_config_target "$output"
+  ((write_client == 0)) || ops_xray_guard_fleet_write "$client_output" 'Client metadata output'
   if [[ $type == sing-reality ]]; then
     ops_ensure_commands 'sing-box configuration generation' 'jq|jq|jq'
     ops_xray_ensure_singbox_binary
@@ -1043,6 +1092,7 @@ ops_xray_scan() {
     ops_die '--threads must be between 1 and 1000.'
   fi
   ops_validate_absolute_path "$output_dir" || ops_die '--output-dir must be an absolute safe path.'
+  ops_xray_guard_fleet_write "$output_dir" 'Reality scan output (OPS_XRAY_LOG_DIR / --output-dir)'
   if [[ $target == auto ]]; then
     ops_require_command curl
     target=$(curl -fsSL --connect-timeout 10 https://api.ipify.org)
@@ -1061,7 +1111,7 @@ ops_xray_scan() {
     return 0
   fi
   ops_require_command timeout
-  install -d -m 0750 "$output_dir"
+  ops_xray_ensure_dir "$output_dir" 0750
   safe_target=$(tr ':/' '__' <<<"$target" | tr -cd 'A-Za-z0-9_.-')
   csv=$output_dir/$safe_target.csv
   set +e
@@ -1256,6 +1306,7 @@ ops_xray_reverse_client() {
   ops_xray_ensure_jq
   [[ -n $address ]] || ops_die '--address is required.'
   [[ $address =~ ^[A-Za-z0-9:.-]+$ ]] || ops_die 'Invalid server address.'
+  [[ -z $output ]] || ops_xray_guard_fleet_write "$output" 'Reverse client output'
   ops_xray_reverse_require_config "$config"
   uuid=$(jq -r --arg name "$name" '.inbounds[0].settings.clients[] | select(.email == $name and .reverse != null) | .id' "$config")
   tag=$(jq -r --arg name "$name" '.inbounds[0].settings.clients[] | select(.email == $name and .reverse != null) | .reverse.tag' "$config")

@@ -228,7 +228,8 @@ ops_user_service_account() {
     restrictions='no-agent-forwarding,no-port-forwarding,no-pty,no-user-rc,no-X11-forwarding'
   else
     name=${name:-nginx-cert-bot}
-    target_dir=${target_dir:-$OPS_DATA_ROOT/nginx/certs}
+    # Docker Fleet's edge stack mounts ${DATA_ROOT}/edge/certs into nginx.
+    target_dir=${target_dir:-$OPS_DATA_ROOT/edge/certs}
     key_type=rsa
     key_name=cert_deploy_key
     shell=/bin/false

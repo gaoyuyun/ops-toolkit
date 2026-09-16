@@ -14,11 +14,38 @@ Usage:
   opsctl docker migrate SOURCE [--target DIR] [--clear] [--delete-source]
                          [--compose-dir DIR] [--start|--no-start] [--yes] [--dry-run]
   opsctl docker menu
+
+On Docker Fleet managed hosts (/srv/docker/fleet present), init-data, restore,
+migrate and compose targeting Fleet-owned paths are refused; use the Fleet
+controller instead. Backup stays available as a read-only operation.
 EOF
 }
 
 ops_docker_validate_data_path() {
   ops_validate_absolute_path "$1" && [[ $1 != / && $1 != /etc && $1 != /usr && $1 != /var ]]
+}
+
+# Paths whose contents are owned by Docker Fleet on a managed host: bind data,
+# release tree, environment files and Fleet backups.
+ops_docker_fleet_owned_path() {
+  local target=$1 fleet_root root
+  fleet_root=$(ops_fleet_root)
+  for root in "$OPS_DATA_ROOT" "$fleet_root" "$(dirname -- "$fleet_root")/env" "$(dirname -- "$fleet_root")/backup"; do
+    case $target in
+      "$root" | "$root"/*) return 0 ;;
+    esac
+    case $root in
+      "$target"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+ops_docker_guard_fleet_path() {
+  local operation=$1 target=$2
+  ops_fleet_host >/dev/null || return 0
+  ops_docker_fleet_owned_path "$target" || return 0
+  ops_fleet_require_standalone "$operation into $target"
 }
 
 ops_docker_install() {
@@ -163,6 +190,7 @@ ops_docker_init_data() {
     esac
   done
   ops_docker_validate_data_path "$OPS_DATA_ROOT" || ops_die 'Unsafe OPS_DATA_ROOT.'
+  ops_docker_guard_fleet_path init-data "$OPS_DATA_ROOT"
   local user
   for user in "${users[@]}"; do
     ops_validate_user "$user" || ops_die "Invalid user: $user"
@@ -193,7 +221,8 @@ ops_docker_compose() {
   ops_parse_safety_flags args "$@"
   ((${#args[@]} == 0)) || ops_die "Unknown compose option: ${args[0]}"
   ops_docker_validate_data_path "$directory" || ops_die 'Unsafe Compose directory.'
-  mapfile -d '' compose_files < <(find "$directory" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
+  ops_docker_guard_fleet_path "compose $action" "$directory"
+  mapfile -d '' -t compose_files < <(find "$directory" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 | sort -z)
   ((${#compose_files[@]} > 0)) || ops_die "No Compose file found in $directory"
   ops_ensure_commands 'Docker Compose operation' 'docker|docker.io|docker'
   if docker compose version >/dev/null 2>&1; then
@@ -205,7 +234,6 @@ ops_docker_compose() {
   fi
   local compose_file
   for compose_file in "${compose_files[@]}"; do
-    compose_file=${compose_file%$'\0'}
     command+=(--file "$compose_file")
   done
   ops_confirm "$action Docker Compose services in $directory?"
@@ -255,8 +283,11 @@ ops_docker_backup() {
     ops_log "Would create archive of $source at $output (encrypt=$encrypt)."
     return 0
   fi
-  umask 077
-  tar -czf "$output" -C "$(dirname "$source")" "$(basename "$source")"
+  # Keep umask scoped to the archive creation; the menu shares this shell.
+  (
+    umask 077
+    tar -czf "$output" -C "$(dirname "$source")" "$(basename "$source")"
+  )
   chmod 0600 "$output"
   if ((encrypt)); then
     ops_ensure_commands 'Encrypted Docker backup' 'gpg|gpg|gnupg'
@@ -272,7 +303,7 @@ ops_docker_restore() {
   local archive=${1:-}
   shift || true
   local -a args
-  local target=$OPS_DATA_ROOT clear=0 compose_dir='' start=0 temp='' source_archive
+  local target=$OPS_DATA_ROOT clear=0 compose_dir='' start=0 temp_dir='' source_archive
   [[ -n $archive ]] || ops_die 'An archive path is required.'
   ops_parse_safety_flags args "$@"
   set -- "${args[@]}"
@@ -299,13 +330,19 @@ ops_docker_restore() {
   done
   [[ -f $archive && ! -L $archive ]] || ops_die 'Archive must be a regular non-symlink file.'
   ops_docker_validate_data_path "$target" || ops_die 'Unsafe restore target.'
+  ops_docker_guard_fleet_path restore "$target"
   source_archive=$archive
   if [[ $archive == *.gpg ]]; then
     ops_ensure_commands 'Encrypted Docker restore' 'gpg|gpg|gnupg'
-    temp=$(mktemp --suffix=.tar.gz)
     if ((OPS_DRY_RUN == 0)); then
-      gpg --output "$temp" --decrypt "$archive"
-      source_archive=$temp
+      # gpg refuses to overwrite an existing --output file, so decrypt into a
+      # fresh path inside a private temporary directory.
+      temp_dir=$(mktemp -d)
+      source_archive=$temp_dir/archive.tar.gz
+      gpg --output "$source_archive" --decrypt "$archive" || {
+        rm -rf -- "$temp_dir"
+        ops_die "Unable to decrypt archive: $archive"
+      }
     fi
   fi
   ((OPS_DRY_RUN)) || ops_docker_archive_safe "$source_archive"
@@ -313,7 +350,7 @@ ops_docker_restore() {
   ops_require_root_unless_dry_run
   if ((OPS_DRY_RUN)); then
     ops_log "Would restore $archive into $target."
-    [[ -z $temp ]] || rm -f "$temp"
+    [[ -z $temp_dir ]] || rm -rf -- "$temp_dir"
     return 0
   fi
   install -d -m 2775 -o root -g "$OPS_DOCKER_GROUP" "$target"
@@ -323,7 +360,7 @@ ops_docker_restore() {
   find "$target" -type d -exec chmod 2775 {} +
   find "$target" -type f -exec chmod 0664 {} +
   find "$target" -type f \( -name '*.sh' -o -name '*.py' \) -exec chmod 0775 {} +
-  [[ -z $temp ]] || rm -f "$temp"
+  [[ -z $temp_dir ]] || rm -rf -- "$temp_dir"
   if ((start)); then
     [[ -n $compose_dir ]] || compose_dir=$target
     ops_docker_compose up "$compose_dir" --yes
@@ -372,10 +409,13 @@ ops_docker_migrate() {
   fi
   [[ -d $source && ! -L $source ]] || ops_die 'Migration source must be a regular directory.'
   [[ $source != "$target" ]] || ops_die 'Source and target must differ.'
+  ops_docker_guard_fleet_path migrate "$target"
+  ((delete_source == 0)) || ops_docker_guard_fleet_path 'migrate --delete-source' "$source"
   ops_ensure_commands 'Docker data migration' 'rsync|rsync|rsync'
   if [[ -z $compose_dir ]] && find "$source" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -print -quit | grep -q .; then
     compose_dir=$source
   fi
+  [[ -z $compose_dir ]] || ops_docker_guard_fleet_path 'compose down' "$compose_dir"
   ops_confirm "Stop Compose and migrate $source to $target?"
   ops_require_root_unless_dry_run
   if [[ -n $compose_dir ]]; then

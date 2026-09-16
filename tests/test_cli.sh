@@ -6,6 +6,9 @@ temp=$(mktemp -d)
 vscode_test_pid=''
 trap '[[ -z ${vscode_test_pid:-} ]] || kill "$vscode_test_pid" 2>/dev/null || true; rm -rf -- "$temp"' EXIT INT TERM
 wsl_test_user=$(id -un)
+# Keep the suite hermetic on Docker Fleet hosts: point the Fleet marker at an
+# empty tree so standalone behaviour is exercised unless a test overrides it.
+export OPS_FLEET_STATE_FILE="$temp/no-fleet/fleet/state/deployment.json"
 
 "$root/bin/opsctl" --version | grep '^opsctl 0\.1\.2' >/dev/null
 "$root/bin/opsctl" --help | grep 'fail2ban install' >/dev/null
@@ -109,6 +112,7 @@ case ${1:-} in
     XRAY_IN_CONTAINER=1 exec "$XRAY_FAKE_XRAY" "$@"
     ;;
   restart) printf '%s\n' "$2" ;;
+  info) exit "${DOCKER_INFO_STATUS:-1}" ;;
   *) exit 1 ;;
 esac
 EOF
@@ -130,6 +134,10 @@ generate_output=$(XRAY_CONTAINER_MISSING=1 PATH="$temp/bin:$PATH" "$root/bin/ops
 [[ $generate_output == *'Short ID:   a1b2c3d4'* ]]
 jq -e '.inbounds[0].port == 8443' "$temp/config.json" >/dev/null
 [[ $(stat -c '%a' "$temp/config.json") == 664 ]]
+# Writing outside the Docker data root must not rewrite the parent directory mode.
+[[ $(stat -c '%a' "$temp") == 700 ]]
+default_status=$(OPS_CONFIG_FILE=/dev/null XRAY_CONTAINER_MISSING=1 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray status)
+[[ $default_status == *'config=/srv/docker/data/xray/config.json'* ]]
 ln -s "$temp/elsewhere" "$temp/link.json"
 if PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray generate reality --env-file "$temp/xray.env" --output "$temp/link.json" >/dev/null 2>&1; then
   echo 'symlink output was accepted' >&2
@@ -202,9 +210,10 @@ jq -e '.inbounds[0].streamSettings.realitySettings.target == "new.example.org:44
 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray rollback --config "$temp/auto.json" --yes
 jq -e '.inbounds[0].streamSettings.realitySettings.target == "example.org:443"' "$temp/auto.json" >/dev/null
 
-fleet_state="$temp/fleet-deployment.json"
-fleet_xray_root="$temp/fleet-data/xray"
+fleet_state="$temp/fleet-host/fleet/state/deployment.json"
+fleet_xray_root="$temp/fleet-host/data/xray"
 install -d -m 0750 "$fleet_xray_root"
+install -d "$(dirname -- "$fleet_state")"
 cp "$temp/auto.json" "$fleet_xray_root/config.json"
 jq '.inbounds[0].streamSettings.realitySettings.serverNames = ["stale.example.org"]' \
   "$temp/auto.json" >"$temp/stale-fleet.json"
@@ -267,6 +276,41 @@ if OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$fleet_xray_root/config.
   exit 1
 fi
 grep 'Docker Fleet.*server-configuration is disabled' "$temp/fleet-generate.err" >/dev/null
+# Any file inside the Fleet-owned xray bind directory is refused, not only config.json.
+if OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$fleet_xray_root/config.json" \
+  PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray generate reality \
+  --server-name blocked.example.org --output "$fleet_xray_root/other.json" --yes \
+  >/dev/null 2>"$temp/fleet-generate-sibling.err"; then
+  echo 'Fleet-managed xray directory accepted a sibling server config' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*server-configuration is disabled' "$temp/fleet-generate-sibling.err" >/dev/null
+[[ ! -e $fleet_xray_root/other.json ]]
+if OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$fleet_xray_root/config.json" \
+  XRAY_CONTAINER_MISSING=1 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray scan \
+  --target 203.0.113.10 --scanner "$temp/bin/scanner" --checker "$temp/bin/checker" \
+  --minutes 1 --output-dir "$fleet_xray_root" --yes >/dev/null 2>"$temp/fleet-scan.err"; then
+  echo 'Fleet-managed xray directory accepted scan output' >&2
+  exit 1
+fi
+grep 'Docker Fleet Xray data directory' "$temp/fleet-scan.err" >/dev/null
+[[ ! -e $fleet_xray_root/203.0.113.10.csv ]]
+# Generation to a path outside the Fleet xray directory stays available.
+OPS_FLEET_STATE_FILE="$fleet_state" OPS_XRAY_CONFIG="$fleet_xray_root/config.json" \
+  XRAY_CONTAINER_MISSING=1 PATH="$temp/bin:$PATH" "$root/bin/opsctl" xray generate reality \
+  --server-name allowed.example.org --output "$temp/fleet-side/config.json" --yes >/dev/null
+[[ -f $temp/fleet-side/config.json ]]
+[[ $(stat -c '%a' "$fleet_xray_root") == 750 ]]
+# The Fleet management tree alone (no deployment marker yet) also marks the host as managed.
+fleet_tree="$temp/fleet-tree"
+install -d "$fleet_tree/fleet/state" "$fleet_tree/fleet/current" "$fleet_tree/fleet/releases" "$fleet_tree/data"
+if OPS_FLEET_STATE_FILE="$fleet_tree/fleet/state/deployment.json" PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" xray restart xray --dry-run --yes \
+  >/dev/null 2>"$temp/fleet-tree.err"; then
+  echo 'Fleet management tree did not block restart' >&2
+  exit 1
+fi
+grep 'Docker Fleet.*host: unknown' "$temp/fleet-tree.err" >/dev/null
 if OPS_FLEET_STATE_FILE="$temp/missing-fleet-state.json" \
   XRAY_FLEET_WORKDIR=/srv/docker/fleet/current/xray PATH="$temp/bin:$PATH" \
   "$root/bin/opsctl" xray restart xray --dry-run --yes \
@@ -345,7 +389,46 @@ firewall_output=$("$root/bin/opsctl" firewall install --dry-run --yes 2>&1)
 "$root/bin/opsctl" docker backup --source "$temp/docker-source" --output "$temp/out.tar.gz" --dry-run --yes >/dev/null
 "$root/bin/opsctl" docker restore "$temp/docker-backup.tar.gz" --target "$temp/docker-target" --clear --dry-run --yes >/dev/null
 "$root/bin/opsctl" docker migrate "$temp/docker-source" --target "$temp/docker-target" --clear --delete-source --dry-run --yes >/dev/null
+
+# Docker data mutations that touch Fleet-owned paths are refused on managed hosts.
+fleet_data="$temp/fleet-host/data"
+for docker_case in \
+  'init-data' \
+  "restore $temp/docker-backup.tar.gz --target $fleet_data/old --clear" \
+  "migrate $temp/docker-source --target $fleet_data/old" \
+  "compose down $temp/fleet-host/fleet/current/xray" \
+  "compose up $temp/fleet-host/env"; do
+  # shellcheck disable=SC2086
+  if OPS_FLEET_STATE_FILE="$fleet_state" OPS_DATA_ROOT="$fleet_data" \
+    "$root/bin/opsctl" docker $docker_case --dry-run --yes >/dev/null 2>"$temp/fleet-docker.err"; then
+    echo "Fleet-managed docker $docker_case was accepted" >&2
+    exit 1
+  fi
+  grep 'managed by Docker Fleet (host: azure-us).*fleet azure-us plan' "$temp/fleet-docker.err" >/dev/null
+done
+# A legacy data root above the Fleet tree is refused as well.
+if OPS_FLEET_STATE_FILE="$fleet_state" OPS_DATA_ROOT="$temp/fleet-host" \
+  "$root/bin/opsctl" docker init-data --dry-run --yes >/dev/null 2>"$temp/fleet-legacy.err"; then
+  echo 'Fleet-managed legacy data root was accepted' >&2
+  exit 1
+fi
+grep 'managed by Docker Fleet' "$temp/fleet-legacy.err" >/dev/null
+# Read-only backup and unrelated directories remain available.
+OPS_FLEET_STATE_FILE="$fleet_state" OPS_DATA_ROOT="$fleet_data" \
+  "$root/bin/opsctl" docker backup --output "$temp/fleet-out.tar.gz" --dry-run --yes >/dev/null
+OPS_FLEET_STATE_FILE="$fleet_state" OPS_DATA_ROOT="$fleet_data" \
+  "$root/bin/opsctl" docker migrate "$temp/docker-source" --target "$temp/docker-target" --no-start --dry-run --yes >/dev/null
 "$root/bin/opsctl" maintenance cleanup --all --volumes --dry-run --yes >/dev/null
+# Fleet hosts must never lose stopped stack containers or managed networks to "system prune".
+fleet_cleanup=$(OPS_FLEET_STATE_FILE="$fleet_state" DOCKER_INFO_STATUS=0 PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" maintenance cleanup --docker --volumes --dry-run --yes 2>&1)
+[[ $fleet_cleanup == *'docker image prune -af'* ]]
+[[ $fleet_cleanup == *'docker volume prune -f '* ]]
+[[ $fleet_cleanup != *'system prune'* ]]
+standalone_cleanup=$(DOCKER_INFO_STATUS=0 PATH="$temp/bin:$PATH" \
+  "$root/bin/opsctl" maintenance cleanup --docker --dry-run --yes 2>&1)
+[[ $standalone_cleanup == *'docker system prune -af'* ]]
+[[ $standalone_cleanup != *'volume prune'* ]]
 "$root/bin/opsctl" maintenance cleanup --vscode-user "$wsl_test_user" --dry-run --yes >/dev/null
 "$root/bin/opsctl" maintenance analyze >/dev/null
 vscode_root="$temp/vscode-server/bin"

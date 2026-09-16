@@ -87,7 +87,7 @@ bin/opsctl firewall install --dry-run
 bin/opsctl fail2ban install --dry-run
 bin/opsctl logrotate install --dry-run
 bin/opsctl docker init-data --user deploy --dry-run
-bin/opsctl docker backup --source /srv/docker --output /tmp/docker.tar.gz --dry-run
+bin/opsctl docker backup --source /srv/docker/data --output /tmp/docker.tar.gz --dry-run
 bin/opsctl maintenance analyze
 bin/opsctl maintenance cleanup --all --dry-run
 bin/opsctl wsl status
@@ -127,19 +127,21 @@ cd /path/to/ops-toolkit
 1. `/etc/ops-toolkit/config.env`
 2. `~/.config/ops-toolkit/config.env`
 
-参考 [config.env.example](config.env.example)。解析器只接受已知的 `KEY=VALUE`，不会把配置文件当 Shell 执行。通用默认值如下：
+参考 [config.env.example](config.env.example)。解析器只接受已知的 `KEY=VALUE`，不会把配置文件当 Shell 执行。默认值遵循 Docker Fleet 的主机目录布局：`/srv/docker/data` 存放 Stack bind 数据，`/srv/docker/fleet` 存放 release、`current`/`previous` 链接和 `state/deployment.json`，`/srv/docker/env` 和 `/srv/docker/backup` 分别存放环境文件和 Fleet 备份。通用默认值如下：
 
 ```text
-OPS_DATA_ROOT=/srv/docker
+OPS_DATA_ROOT=/srv/docker/data
 OPS_DOCKER_GROUP=docker-data
 OPS_DEFAULT_SSH_PORT=22
 OPS_XRAY_CONTAINER=xray
 OPS_NGINX_CONTAINER=nginx
-OPS_XRAY_CONFIG=/srv/docker/xray/config.json
-OPS_NGINX_STREAM_CONFIG=/srv/docker/nginx/conf.d/default.stream
-OPS_XRAY_LOG_DIR=/srv/docker/xray
+OPS_XRAY_CONFIG=/srv/docker/data/xray/config.json
+OPS_NGINX_STREAM_CONFIG=/srv/docker/data/nginx/conf.d/default.stream
+OPS_XRAY_LOG_DIR=/srv/docker/data/ops-toolkit/xray
 OPS_FLEET_STATE_FILE=/srv/docker/fleet/state/deployment.json
 ```
+
+历史主机若仍使用旧的 `/srv/docker/<service>` 布局，可在配置文件中覆盖 `OPS_DATA_ROOT` 等路径。
 
 普通用户的本地工具默认安装到 `~/.local/bin`，root 默认安装到 `/usr/local/bin`。只有需要覆盖时才在配置文件中设置 `OPS_BIN_DIR`/`OPS_XRAY_BIN` 等绝对路径。
 
@@ -168,16 +170,16 @@ sudo bin/opsctl fail2ban install
 sudo bin/opsctl logrotate install
 ```
 
-`firewall install` 会先放行指定 SSH 端口以及 HTTP/HTTPS，再启用 UFW。Vaultwarden jail/filter 会随 Fail2ban 资源保留；请确保 `OPS_VAULTWARDEN_LOG_PATH` 指向实际日志路径。
+`firewall install` 会先放行指定 SSH 端口以及 HTTP/HTTPS，再启用 UFW。Vaultwarden jail/filter 会随 Fail2ban 资源保留；请确保 `OPS_VAULTWARDEN_LOG_PATH` 指向实际日志路径。`user cert` 的默认证书目录是 `OPS_DATA_ROOT/edge/certs`，对应 Fleet `edge` Stack 挂载到 nginx 的 `${DATA_ROOT}/edge/certs`；旧布局可用 `--cert-dir` 覆盖。
 
 ## Docker 数据和维护
 
 ```bash
 sudo bin/opsctl docker install --source distro --user deploy
 sudo bin/opsctl docker init-data --user deploy
-sudo bin/opsctl docker backup --source /srv/docker --output /srv/docker_backup.tar.gz
-sudo bin/opsctl docker restore /srv/docker_backup.tar.gz --target /srv/docker --clear --start
-sudo bin/opsctl docker migrate /old/docker --target /srv/docker --clear
+sudo bin/opsctl docker backup --source /srv/docker/data --output /srv/docker/backup/docker_backup.tar.gz
+sudo bin/opsctl docker restore /srv/docker/backup/docker_backup.tar.gz --target /srv/docker/data --clear --start
+sudo bin/opsctl docker migrate /old/docker --target /srv/docker/data --clear
 bin/opsctl maintenance analyze
 sudo bin/opsctl maintenance cleanup --all
 sudo bin/opsctl maintenance cleanup --vscode
@@ -185,7 +187,11 @@ sudo bin/opsctl maintenance cleanup --vscode
 
 Docker 迁移会识别目录顶层多个 `.yml`/`.yaml` 文件，停止源 Compose、迁移数据、修正权限并启动目标 Compose。使用 `--no-start` 可跳过启动；清理 Docker 卷必须显式使用 `--volumes`。
 
+在 Docker Fleet 纳管的主机上（存在 `/srv/docker/fleet/state/deployment.json` 或 `/srv/docker/fleet` 管理目录），`init-data`、`restore`、`migrate` 以及针对 `/srv/docker/data`、`/srv/docker/fleet`、`/srv/docker/env`、`/srv/docker/backup` 的 `compose up|down` 会被拒绝，并提示改用 Fleet 控制机的 `plan`/`apply`/`backup`/`rollback`。只读的 `backup` 仍可使用。这些命令保留给尚未纳管的独立主机以及向 Fleet 布局迁移旧数据的场景。
+
 维护分析会统计历史 VS Code Server 版本。`cleanup --vscode` 会扫描本机登录用户的 `.vscode-server`、`.vscode-server-insiders` 和旧版 `.vscode-remote` 目录，每种 Server 安装保留最新版本以及所有正在运行的版本；使用 `--vscode-user USER` 可只清理指定用户。该类别也包含在默认清理和 `--all` 中。
+
+Fleet 纳管主机上的 Docker 清理只执行 `docker image prune -af`，加 `--volumes` 时再执行 `docker volume prune -f`，与 Fleet 自身的 gc 策略一致；不会运行 `docker system prune`，以免删除处于 `stopped` 状态的 Stack 容器或暂时没有成员的 Fleet 外部网络。
 
 ## 独立工具
 
@@ -196,7 +202,7 @@ Xray 模块分为两条独立路径：
 - 本地工具链：配置生成和 Reality 扫描。缺少二进制时提示下载并安装到标准 bin 目录；普通用户默认 `~/.local/bin`，root 默认 `/usr/local/bin`。
 - Docker 运行时管理：状态/校验、配置查看、容器重启、SNI、回滚和反向连接。它要求 `OPS_XRAY_CONTAINER` 指定的容器存在并正在运行，但不会创建容器。
 
-当 `/srv/docker/fleet/state/deployment.json` 或 Xray 容器的 Compose 工作目录表明该主机由 Docker Fleet 管理时，交互菜单会自动切换为只读观测模式，只保留查看、校验、状态和 Reality 扫描。工具会从容器 bind mount 解析实际的 `config.json`，因此兼容 Fleet 的 `/srv/docker/data/xray/config.json`。SNI、回滚、直接重启以及反向连接增删会被拒绝；这些操作应在 Fleet 控制机完成，例如：
+当 `/srv/docker/fleet/state/deployment.json`、`/srv/docker/fleet` 管理目录或 Xray 容器的 Compose 工作目录表明该主机由 Docker Fleet 管理时，交互菜单会自动切换为只读观测模式，只保留查看、校验、状态和 Reality 扫描。默认配置路径已经是 Fleet 的 `/srv/docker/data/xray/config.json`；工具还会从容器 bind mount 解析实际挂载的 `config.json`，因此覆盖过 `OPS_XRAY_CONFIG` 的旧配置也能正确读取。SNI、回滚、直接重启以及反向连接增删会被拒绝；任何写入 Fleet Xray 数据目录的操作（生成服务端配置、客户端参数文件、反向客户端文件、扫描结果）也会被拒绝，避免破坏 Fleet 声明的 `2750`/`0640` 权限并产生漂移。这些操作应在 Fleet 控制机完成，例如：
 
 ```bash
 ./docker-fleet/bin/fleet <host> sni new.example.org
@@ -222,13 +228,13 @@ bin/opsctl xray deps --sing-box --yes
 sudo bin/opsctl xray generate reality \
   --server-name example.org \
   --target example.org:443 \
-  --output /srv/docker/xray/config.json \
+  --output /srv/docker/data/xray/config.json \
   --yes
 
 sudo bin/opsctl xray generate sing-reality \
   --server-name example.org \
   --target example.org:443 \
-  --output /srv/docker/sing-box/config.json \
+  --output /srv/docker/data/sing-box/config.json \
   --yes
 ```
 
@@ -237,7 +243,7 @@ sudo bin/opsctl xray generate sing-reality \
 ```bash
 bin/opsctl xray generate reality \
   --env-file ~/.config/ops-toolkit/xray.env \
-  --output /srv/docker/xray/config.json
+  --output /srv/docker/data/xray/config.json
 ```
 
 常用管理命令：
@@ -250,7 +256,7 @@ sudo bin/opsctl xray sni set new.example.org --restart --yes
 sudo bin/opsctl xray rollback --restart --yes
 ```
 
-`view` 显示文件路径、大小、修改时间、完整 UUID、SNI、Short ID、Public Key 和反向连接数量，但不显示私钥；只有显式执行 `view --full --yes` 才打印完整配置。每次修改配置前会保留一个 `config.json.bak`，可由 `rollback` 恢复。为兼容原 Docker 数据目录，Xray 配置和扫描结果使用 `0664`，目录使用 `2775`；这意味着其他本机用户也可能读取配置，安全要求更高的主机应自行改回 `0640`/`0600`。
+`view` 显示文件路径、大小、修改时间、完整 UUID、SNI、Short ID、Public Key 和反向连接数量，但不显示私钥；只有显式执行 `view --full --yes` 才打印完整配置。每次修改配置前会保留一个 `config.json.bak`，可由 `rollback` 恢复。在独立主机上，为兼容原 Docker 数据目录，Xray 配置和扫描结果使用 `0664`，目录使用 `2775`；这意味着其他本机用户也可能读取配置，安全要求更高的主机应自行改回 `0640`/`0600`。Fleet 纳管主机的 Xray 数据目录权限由 Fleet 声明并收敛，工具不会改写。
 
 反向连接管理：
 
@@ -270,7 +276,7 @@ bin/opsctl xray deps --sing-box --yes
 bin/opsctl xray scan --minutes 3 --yes
 ```
 
-默认安装位置由 `OPS_XRAY_SCANNER` 和 `OPS_XRAY_CHECKER` 控制。也可以通过 `--scanner` 和 `--checker` 使用经过自行审核的本地文件。扫描命令不提供 `--target` 时自动查询公网 IP；CSV 写入 `OPS_XRAY_LOG_DIR/<IP>.csv`，验证结果兼容原脚本写入 `OPS_XRAY_LOG_DIR/scan_result.txt`。
+默认安装位置由 `OPS_XRAY_SCANNER` 和 `OPS_XRAY_CHECKER` 控制。也可以通过 `--scanner` 和 `--checker` 使用经过自行审核的本地文件。扫描命令不提供 `--target` 时自动查询公网 IP；CSV 写入 `OPS_XRAY_LOG_DIR/<IP>.csv`，验证结果兼容原脚本写入 `OPS_XRAY_LOG_DIR/scan_result.txt`。`OPS_XRAY_LOG_DIR` 默认是 `/srv/docker/data/ops-toolkit/xray`，与 Fleet 管理的 `xray` bind 目录分离；Fleet 纳管主机上不允许把扫描结果写入该 bind 目录。
 
 Fail2ban 和 Docker 数据迁移的兼容行为：Fail2ban 模板保留原默认封禁时间、nftables/DOCKER-USER 动作以及 Vaultwarden jail；Docker 迁移会自动查找源目录的 Compose 文件、停止服务、迁移数据、修正权限并启动目标 Compose，使用 `--no-start` 可跳过启动。
 

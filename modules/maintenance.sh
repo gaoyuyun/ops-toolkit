@@ -12,6 +12,8 @@ Usage: opsctl maintenance analyze
 Without category flags, cleanup behaves like --all but does not remove Docker
 volumes. VS Code cleanup retains the newest and every running server version for
 each user. --volumes is always explicit because volume data cannot be recovered.
+On Docker Fleet hosts the Docker category only prunes unused images (and unused
+volumes with --volumes); stopped containers and networks stay untouched.
 EOF
 }
 
@@ -247,8 +249,17 @@ ops_maintenance_cleanup() {
   fi
   if ((do_docker)); then
     if ops_has docker && docker info >/dev/null 2>&1; then
-      ops_run docker system prune -af
-      ((do_volumes == 0)) || ops_run docker volume prune -af
+      if ops_fleet_host >/dev/null; then
+        # Fleet keeps "stopped" stacks as stopped containers and manages the
+        # external networks itself, so never run "system prune" here. Mirror the
+        # Fleet gc policy instead: unused images, optionally unused volumes.
+        ops_log 'Docker Fleet host detected; pruning only unused images/volumes (containers and networks are Fleet-managed).'
+        ops_run docker image prune -af
+        ((do_volumes == 0)) || ops_run docker volume prune -f
+      else
+        ops_run docker system prune -af
+        ((do_volumes == 0)) || ops_run docker volume prune -af
+      fi
     else
       ops_warn 'Docker is unavailable or not running; skipping Docker cleanup.'
     fi
