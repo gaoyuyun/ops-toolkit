@@ -181,6 +181,24 @@ ops_user_zsh_add_plugin() {
   fi
 }
 
+# Adds the nightly nginx reload job to root's crontab exactly once. A fresh
+# host has no root crontab, so `crontab -l` exits 1; that must never abort the
+# caller under set -e, because the private key is printed afterwards and would
+# otherwise be left on disk unseen. Cron problems are reported as warnings.
+ops_user_ensure_nginx_reload_cron() {
+  local marker="docker exec $OPS_NGINX_CONTAINER nginx -s reload" current
+  if ! ops_has crontab; then
+    ops_warn 'crontab is not installed; skipping the nightly nginx reload job.'
+    return 0
+  fi
+  current=$(crontab -l 2>/dev/null || true)
+  [[ $current != *"$marker"* ]] || return 0
+  [[ -z $current ]] || current+=$'\n'
+  if ! printf '%s0 3 * * * %s >/dev/null 2>&1\n' "$current" "$marker" | crontab -; then
+    ops_warn 'Could not install the nightly nginx reload cron job; add it manually if needed.'
+  fi
+}
+
 ops_user_service_account() {
   local kind=$1
   shift
@@ -298,12 +316,7 @@ ops_user_service_account() {
       '    PermitTTY no' >/etc/ssh/sshd_config.d/91-ops-toolkit-cert.conf
     sshd -t || ops_die 'sshd rejected the certificate-account configuration.'
     ops_ssh_reload
-    if ((cron)) && ! crontab -l 2>/dev/null | grep -qF "docker exec $OPS_NGINX_CONTAINER nginx -s reload"; then
-      (
-        crontab -l 2>/dev/null
-        printf '0 3 * * * docker exec %s nginx -s reload >/dev/null 2>&1\n' "$OPS_NGINX_CONTAINER"
-      ) | crontab -
-    fi
+    ((cron == 0)) || ops_user_ensure_nginx_reload_cron
   fi
   ops_user_print_private_key "$key" "$keep"
 }

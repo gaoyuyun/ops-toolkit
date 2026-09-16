@@ -376,6 +376,67 @@ printf test >"$temp/docker-source/data/file"
 tar -czf "$temp/docker-backup.tar.gz" -C "$temp/docker-source" .
 "$root/bin/opsctl" user backup ops-test-backup --backup-dir "$temp/docker-source" --dry-run --yes >/dev/null
 "$root/bin/opsctl" user cert ops-test-cert --cert-dir "$temp/docker-source/certs" --dry-run --yes >/dev/null
+
+# The cert account's --cron step runs as root without a crontab on a fresh host
+# ("no crontab for root" exits 1). It must still complete, append on its own
+# line, never duplicate the job, and only warn when crontab is unavailable.
+cat >"$temp/bin/crontab" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+store=${CRONTAB_TEST_FILE:?}
+case ${1:-} in
+  -l)
+    [[ -f $store ]] || {
+      echo 'no crontab for root' >&2
+      exit 1
+    }
+    cat "$store"
+    ;;
+  -) cat >"$store" ;;
+  *)
+    echo "unexpected crontab invocation: $*" >&2
+    exit 2
+    ;;
+esac
+EOF
+chmod 0755 "$temp/bin/crontab"
+cron_job='0 3 * * * docker exec nginx nginx -s reload >/dev/null 2>&1'
+cron_output=$(
+  CRONTAB_TEST_FILE="$temp/root.crontab" PATH="$temp/bin:$PATH" OPS_ROOT="$root" bash -c '
+    set -Eeuo pipefail
+    source "$OPS_ROOT/lib/common.sh"
+    source "$OPS_ROOT/modules/user.sh"
+    OPS_NGINX_CONTAINER=nginx
+    ops_user_ensure_nginx_reload_cron
+    echo first_done
+    ops_user_ensure_nginx_reload_cron
+    echo second_done
+  ' 2>&1
+)
+[[ $cron_output == *first_done*second_done* && $cron_output != *WARNING* ]]
+[[ $(<"$temp/root.crontab") == "$cron_job" ]]
+printf '%s\n' '5 4 * * * /usr/local/bin/other-job' >"$temp/root.crontab"
+CRONTAB_TEST_FILE="$temp/root.crontab" PATH="$temp/bin:$PATH" OPS_ROOT="$root" bash -c '
+  set -Eeuo pipefail
+  source "$OPS_ROOT/lib/common.sh"
+  source "$OPS_ROOT/modules/user.sh"
+  OPS_NGINX_CONTAINER=nginx
+  ops_user_ensure_nginx_reload_cron
+'
+[[ $(<"$temp/root.crontab") == "5 4 * * * /usr/local/bin/other-job"$'\n'"$cron_job" ]]
+missing_cron_output=$(
+  OPS_ROOT="$root" bash -c '
+    set -Eeuo pipefail
+    source "$OPS_ROOT/lib/common.sh"
+    source "$OPS_ROOT/modules/user.sh"
+    OPS_NGINX_CONTAINER=nginx
+    ops_has() { [[ $1 != crontab ]] && command -v "$1" >/dev/null 2>&1; }
+    ops_user_ensure_nginx_reload_cron
+    echo missing_done
+  ' 2>&1
+)
+[[ $missing_cron_output == *'crontab is not installed'*missing_done* ]]
+rm "$temp/bin/crontab"
 "$root/bin/opsctl" system hostname ops-test.example --dry-run --yes >/dev/null
 "$root/bin/opsctl" system swap 512M --swappiness 10 --recreate --dry-run --yes >/dev/null
 "$root/bin/opsctl" system bbr --dry-run --yes >/dev/null
