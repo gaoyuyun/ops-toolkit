@@ -10,7 +10,7 @@ wsl_test_user=$(id -un)
 # empty tree so standalone behaviour is exercised unless a test overrides it.
 export OPS_FLEET_STATE_FILE="$temp/no-fleet/fleet/state/deployment.json"
 
-"$root/bin/opsctl" --version | grep '^opsctl 0\.1\.2' >/dev/null
+"$root/bin/opsctl" --version | grep '^opsctl 0\.1\.3' >/dev/null
 "$root/bin/opsctl" --help | grep 'fail2ban install' >/dev/null
 if "$root/bin/opsctl" --help | grep -i 'proxy\|python' >/dev/null; then
   echo 'removed runtime is still advertised by opsctl' >&2
